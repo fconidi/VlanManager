@@ -65,20 +65,20 @@ _EN = {
 
 _IT = {
     "id_range": "L'ID VLAN deve essere compreso tra 1 e 4094.",
-    "name_empty": "Il nome dell'interfaccia non puo' essere vuoto.",
-    "name_len": "Il nome dell'interfaccia puo' avere al massimo 15 caratteri.",
-    "duplicate": "Esiste gia' una VLAN con questo ID o nome su questa interfaccia.",
-    "address_invalid": "L'indirizzo IP non e' valido (usa indirizzo/prefisso, es. 192.168.10.5/24).",
-    "gateway_invalid": "L'indirizzo del gateway non e' valido.",
+    "name_empty": "Il nome dell'interfaccia non può essere vuoto.",
+    "name_len": "Il nome dell'interfaccia può avere al massimo 15 caratteri.",
+    "duplicate": "Esiste già una VLAN con questo ID o nome su questa interfaccia.",
+    "address_invalid": "L'indirizzo IP non è valido (usa indirizzo/prefisso, es. 192.168.10.5/24).",
+    "gateway_invalid": "L'indirizzo del gateway non è valido.",
     "mtu_range": "L'MTU deve essere compreso tra 576 e 9000.",
     "ok": "La VLAN funziona: il gateway ha risposto.",
-    "no_gateway": ("Nessun gateway ottenuto, quindi la raggiungibilita' non "
-                   "e' verificabile. Cause probabili: la porta dello switch "
-                   "non e' taggata per questa VLAN, la VLAN non e' permessa "
-                   "sul trunk, oppure su questa VLAN non c'e' un server DHCP."),
+    "no_gateway": ("Nessun gateway ottenuto, quindi la raggiungibilità non "
+                   "è verificabile. Cause probabili: la porta dello switch "
+                   "non è taggata per questa VLAN, la VLAN non è permessa "
+                   "sul trunk, oppure su questa VLAN non c'è un server DHCP."),
     "ping_failed": ("Il gateway non ha risposto. Cause probabili: la porta "
-                    "dello switch non e' taggata per questa VLAN, la VLAN non "
-                    "e' permessa sul trunk, oppure su questa VLAN non c'e' un "
+                    "dello switch non è taggata per questa VLAN, la VLAN non "
+                    "è permessa sul trunk, oppure su questa VLAN non c'è un "
                     "server DHCP."),
     "nmcli_missing": "nmcli non trovato. Installa NetworkManager.",
     "nmcli_timeout": "NetworkManager non ha risposto in tempo.",
@@ -108,13 +108,13 @@ _IT = {
     "field_dns": "DNS",
     "field_autoconnect": "Connetti automaticamente",
     "field_mtu": "MTU",
-    "confirm_countdown": ("Mantenere questa configurazione? Verra' "
+    "confirm_countdown": ("Mantenere questa configurazione? Verrà "
                           "ripristinata automaticamente tra {seconds} secondi."),
-    "confirm_delete": "Eliminare questa VLAN? La connessione verra' rimossa.",
-    "tooltip_unmanaged": "Questa interfaccia non e' gestita da NetworkManager.",
-    "nm_not_running": "NetworkManager non e' in esecuzione.",
-    "warn_8021q_missing": ("Il modulo del kernel 8021q non e' disponibile; "
-                           "non e' possibile creare VLAN."),
+    "confirm_delete": "Eliminare questa VLAN? La connessione verrà rimossa.",
+    "tooltip_unmanaged": "Questa interfaccia non è gestita da NetworkManager.",
+    "nm_not_running": "NetworkManager non è in esecuzione.",
+    "warn_8021q_missing": ("Il modulo del kernel 8021q non è disponibile; "
+                           "non è possibile creare VLAN."),
     "native_vlan_note": ("Il traffico senza tag resta sulla connessione base "
                          "(VLAN nativa)."),
     "polkit_denied": ("Permesso negato. Servono le autorizzazioni di "

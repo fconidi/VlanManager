@@ -1,4 +1,5 @@
 import os
+import re
 import unittest
 from unittest import mock
 
@@ -65,6 +66,19 @@ class I18nTest(unittest.TestCase):
         self.assertEqual(i18n.tr("btn_cancel"), "Annulla")
         i18n.set_language("en")
         self.assertEqual(i18n.tr("btn_cancel"), "Cancel")
+
+    def test_italian_uses_accented_letters(self):
+        self.assertIn("già", i18n._IT["duplicate"])
+
+    def test_italian_has_no_ascii_accent_substitutes(self):
+        pat = re.compile(r"[a-z]'(\s|$|[.,;:!?])")
+        for key, value in i18n._IT.items():
+            self.assertIsNone(pat.search(value), (key, value))
+
+    def test_italian_reachability_causes_mentioned(self):
+        for key in ("no_gateway", "ping_failed"):
+            self.assertIn("trunk", i18n._IT[key])
+            self.assertIn("DHCP", i18n._IT[key])
 
 
 if __name__ == "__main__":

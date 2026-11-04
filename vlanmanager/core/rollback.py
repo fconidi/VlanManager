@@ -22,7 +22,12 @@ def run_with_rollback(apply: Callable[[], None], undo: Callable[[], None],
     except Exception as exc:
         _undo(undo, exc)
         raise
-    if ask_confirm():
+    try:
+        confirmed = ask_confirm()
+    except Exception as exc:
+        _undo(undo, exc)
+        raise
+    if confirmed:
         return True
     _undo(undo, None)
     return False

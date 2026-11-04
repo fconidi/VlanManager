@@ -46,6 +46,13 @@ class RollbackTest(unittest.TestCase):
             run_with_rollback(bad, bad_undo, lambda: True)
         self.assertIs(ctx.exception.__cause__, original)
 
+    def test_confirm_error_runs_undo_and_reraises(self):
+        def bad_ask():
+            raise RuntimeError("dialog failed")
+        with self.assertRaises(RuntimeError):
+            run_with_rollback(self._apply, self._undo, bad_ask)
+        self.assertEqual(self.calls, ["apply", "undo"])
+
 
 if __name__ == "__main__":
     unittest.main()

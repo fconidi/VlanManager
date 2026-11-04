@@ -69,6 +69,17 @@ class DeleteTest(unittest.TestCase):
         self.assertEqual(nm.calls[-2:],
                          [("create_vlan", OLD), ("up", "eth0.20")])
 
+    def test_delete_failure_does_not_recreate(self):
+        nm = FakeNm(exported=OLD)
+
+        def boom(name):
+            nm.calls.append(("delete_vlan", name))
+            raise NmError("delete failed")
+        nm.delete_vlan = boom
+        with self.assertRaises(NmError):
+            delete_vlan_safe(nm, "eth0.20", lambda: True)
+        self.assertNotIn("create_vlan", nm.names())
+
 
 class EditTest(unittest.TestCase):
     def test_edit_confirmed(self):

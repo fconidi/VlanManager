@@ -35,9 +35,16 @@ def edit_vlan_safe(nm: NmClient, name: str, spec: VlanSpec,
 def delete_vlan_safe(nm: NmClient, name: str,
                      ask_confirm: Callable[[], bool]) -> bool:
     old = nm.export_spec(name)
+    deleted = [False]
+
+    def apply() -> None:
+        nm.delete_vlan(name)
+        deleted[0] = True
 
     def undo() -> None:
+        if not deleted[0]:
+            return  # nothing was removed, so nothing to recreate
         nm.create_vlan(old)
         nm.up(old.name)
 
-    return run_with_rollback(lambda: nm.delete_vlan(name), undo, ask_confirm)
+    return run_with_rollback(apply, undo, ask_confirm)

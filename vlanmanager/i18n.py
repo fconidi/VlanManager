@@ -66,6 +66,9 @@ _EN = {
     "op_reverted": "The change was not confirmed and has been reverted.",
     "destroy_failed_hint": ("The change may be reverted automatically by "
                             "NetworkManager."),
+    "rollback_failed_hint": ("The previous configuration could not be "
+                             "restored automatically: check the network "
+                             "settings."),
     "verify_unavailable": ("The VLAN was applied, but its reachability "
                            "could not be checked."),
     "tooltip_unmanaged": "This interface is not managed by NetworkManager.",
@@ -141,6 +144,9 @@ _IT = {
     "op_reverted": "La modifica non è stata confermata ed è stata annullata.",
     "destroy_failed_hint": ("La modifica potrebbe essere annullata "
                             "automaticamente da NetworkManager."),
+    "rollback_failed_hint": ("Non è stato possibile ripristinare "
+                             "automaticamente la configurazione precedente: "
+                             "controlla le impostazioni di rete."),
     "verify_unavailable": ("La VLAN è stata applicata, ma non è stato "
                            "possibile verificarne la raggiungibilità."),
     "tooltip_unmanaged": "Questa interfaccia non è gestita da NetworkManager.",

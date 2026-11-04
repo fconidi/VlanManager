@@ -53,6 +53,11 @@ class FakeNm:
         self.calls.append(("down", ident))
 
 
+class NoCheckpoints:
+    def available(self):
+        return False
+
+
 _APP = []
 
 
@@ -327,6 +332,24 @@ class DialogTests(unittest.TestCase):
         self.assertTrue(d.ok_button.get_sensitive())
         self.assertFalse(d.parent_combo.get_sensitive())
 
+    def test_edit_dialog_keeps_connection_name(self):
+        editing = VlanSpec("eth0", 20, "eth0.20", con_name="VLAN connection 1")
+        d = dialogs.VlanDialog(self.parent, NICS, [editing], editing=editing)
+        self.dialogs.append(d)
+        d.mtu_entry.set_text("1400")
+        self.assertEqual(d.current_spec().con_name, "VLAN connection 1")
+        self.assertEqual(d.current_spec().name, "eth0.20")
+
+    def test_non_decimal_digit_mtu_is_an_error(self):
+        d = self.make()
+        set_combo(d.parent_combo, "eth0")
+        d.id_spin.set_value(30)
+        d.mtu_entry.set_text("\u00b2")
+        self.assertIn("mtu_range", d.errors())
+        self.assertIsNone(d.current_spec().mtu)
+        self.assertFalse(d.ok_button.get_sensitive())
+        self.assertEqual(d.error_label.get_text(), tr("mtu_range"))
+
     def test_confirm_dialog_returns_false_on_timeout(self):
         d = dialogs.ConfirmDialog(self.parent, seconds=1)
         self.dialogs.append(d)
@@ -407,9 +430,10 @@ class OperationTests(MainWindowTests):
         before = self.refreshes(nm)
         called = {}
 
-        def fake(nm_, ident, ask, checkpoints=None, confirm_timeout_s=None):
+        def fake(nm_, ident, ask, checkpoints=None, confirm_timeout_s=None,
+                 active=None):
             called.update(ident=ident, cp=checkpoints,
-                          timeout=confirm_timeout_s,
+                          timeout=confirm_timeout_s, active=active,
                           thread=threading.get_ident())
             return True
 
@@ -418,6 +442,7 @@ class OperationTests(MainWindowTests):
             win.btn_delete.clicked()
             self.assertTrue(pump(lambda: self.refreshes(nm) > before))
         self.assertEqual(called["ident"], "uuid-1")
+        self.assertIs(called["active"], True)
         self.assertIsNotNone(called["cp"])
         self.assertEqual(called["timeout"], window.ops.CONFIRM_TIMEOUT_S)
         self.assertEqual(dialogs.ConfirmDialog.__init__.__defaults__[0],
@@ -476,9 +501,12 @@ class OperationTests(MainWindowTests):
         self.select(win, "eth0.20")
         self.assertEqual(win.btn_toggle.get_label(), tr("btn_deactivate"))
         before = self.refreshes(nm)
-        win.btn_toggle.clicked()
-        self.assertTrue(pump(lambda: self.refreshes(nm) > before))
+        with mock.patch.object(window, "NmCheckpoints", NoCheckpoints), \
+                mock.patch.object(win, "ask_confirm", return_value=True):
+            win.btn_toggle.clicked()
+            self.assertTrue(pump(lambda: self.refreshes(nm) > before))
         self.assertIn(("down", "uuid-1"), nm.calls)
+        self.assertNotIn(("up", "uuid-1"), nm.calls)
         nm.vlans = [Vlan(nm.vlans[0].spec, "uuid-1", False)]
         win.refresh()
         self.assertTrue(pump(lambda: self.refreshes(nm) > before + 1))
@@ -489,6 +517,67 @@ class OperationTests(MainWindowTests):
         win.btn_toggle.clicked()
         self.assertTrue(pump(lambda: self.refreshes(nm) > before))
         self.assertIn(("up", "uuid-1"), nm.calls)
+
+    def test_deactivate_asks_and_revert_brings_it_up(self):
+        nm = FakeNm()
+        win = self.make(nm)
+        self.select(win, "eth0.20")
+        shown = []
+        real = dialogs.ConfirmDialog
+
+        class Spy(real):
+            def __init__(self, *a, **k):
+                super().__init__(*a, **k)
+                shown.append(1)
+                GLib.timeout_add(50, lambda: (self.btn_revert.clicked(),
+                                              False)[1])
+
+        before = self.refreshes(nm)
+        with mock.patch.object(window, "NmCheckpoints", NoCheckpoints), \
+                mock.patch.object(dialogs, "ConfirmDialog", Spy):
+            win.btn_toggle.clicked()
+            self.assertTrue(pump(lambda: self.refreshes(nm) > before))
+        self.assertEqual(shown, [1])
+        self.assertEqual([c for c in nm.calls if c[0] in ("up", "down")],
+                         [("down", "uuid-1"), ("up", "uuid-1")])
+        self.assertEqual(win.info_label.get_text(), tr("op_reverted"))
+
+    def test_rollback_error_adds_hint(self):
+        from vlanmanager.core.rollback import RollbackError
+        nm = FakeNm()
+        win = self.make(nm)
+        self.select(win, "eth0.20")
+        errors = []
+
+        def boom(*a, **k):
+            raise RollbackError("Error: unknown connection")
+
+        with mock.patch.object(win, "_confirm_delete", return_value=True), \
+                mock.patch.object(win, "_show_error_dialog", errors.append), \
+                mock.patch.object(window.ops, "delete_vlan_safe", boom):
+            win.btn_delete.clicked()
+            self.assertTrue(pump(lambda: errors))
+        self.assertIn("Error: unknown connection", errors[0])
+        self.assertIn(tr("rollback_failed_hint"), errors[0])
+
+    def test_ask_confirm_refuses_main_thread(self):
+        win = self.make(FakeNm())
+        with self.assertRaises(RuntimeError):
+            win.ask_confirm()
+
+    def test_ask_confirm_wait_is_bounded(self):
+        self.assertEqual(window._CONFIRM_WAIT_S,
+                         window.ops.CONFIRM_TIMEOUT_S + 60)
+        win = self.make(FakeNm())
+        out = {}
+        with mock.patch.object(window, "_CONFIRM_WAIT_S", 0.2), \
+                mock.patch.object(window.GLib, "idle_add",
+                                  lambda *a, **k: 0):
+            t = threading.Thread(
+                target=lambda: out.update(r=win.ask_confirm()))
+            t.start()
+            t.join(3)
+        self.assertIs(out.get("r"), False)
 
     def test_create_verifies_with_interface_name_and_shows_info(self):
         nm = FakeNm()
@@ -537,8 +626,8 @@ class OperationTests(MainWindowTests):
         seen = {}
 
         def fake_edit(nm_, ident, s, ask, checkpoints=None,
-                      confirm_timeout_s=None):
-            seen.update(ident=ident, spec=s)
+                      confirm_timeout_s=None, active=None):
+            seen.update(ident=ident, spec=s, active=active)
             return False
 
         before = self.refreshes(nm)
@@ -547,7 +636,8 @@ class OperationTests(MainWindowTests):
                 mock.patch.object(window.ops, "edit_vlan_safe", fake_edit):
             win.btn_edit.clicked()
             self.assertTrue(pump(lambda: self.refreshes(nm) > before))
-        self.assertEqual(seen, {"ident": "uuid-1", "spec": new})
+        self.assertEqual(seen, {"ident": "uuid-1", "spec": new,
+                                "active": True})
 
     def _verify_raises(self, kind):
         nm = FakeNm()

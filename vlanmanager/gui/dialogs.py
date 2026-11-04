@@ -185,9 +185,12 @@ class VlanDialog(Gtk.Dialog):
         text = self.mtu_entry.get_text().strip()
         if not text:
             return None, True
-        if not text.isdigit():
+        if not text.isdecimal():
             return None, False
-        return int(text), True
+        try:
+            return int(text), True
+        except ValueError:  # decimal digits int() does not accept
+            return None, False
 
     def current_spec(self) -> VlanSpec:
         mtu, _ = self._mtu()
@@ -196,7 +199,8 @@ class VlanDialog(Gtk.Dialog):
             vlan_id=self.id_spin.get_value_as_int(),
             name=self.name_entry.get_text().strip(),
             ipv4=self.ipv4_box.config(), ipv6=self.ipv6_box.config(),
-            autoconnect=self.autoconnect.get_active(), mtu=mtu)
+            autoconnect=self.autoconnect.get_active(), mtu=mtu,
+            con_name=self.editing.con_name if self.editing else None)
 
     def errors(self) -> list[str]:
         spec = self.current_spec()

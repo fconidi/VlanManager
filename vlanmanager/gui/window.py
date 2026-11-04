@@ -13,12 +13,15 @@ from ..core import ops, probe  # noqa: E402
 from ..core.checkpoint import CheckpointError, NmCheckpoints  # noqa: E402
 from ..core.model import Nic, Vlan, VlanSpec  # noqa: E402
 from ..core.nm import NmClient, NmError  # noqa: E402
+from ..core.rollback import RollbackError  # noqa: E402
 from ..i18n import tr  # noqa: E402
 from . import dialogs  # noqa: E402
 from .worker import run_async  # noqa: E402
 
 _NM_CODES = ("nmcli_missing", "nmcli_timeout")
 _GREY = "#888888"
+# Longest a worker waits for the confirm dialog before treating it as "no".
+_CONFIRM_WAIT_S = ops.CONFIRM_TIMEOUT_S + 60
 
 
 def _error_text(exc: Exception) -> str:
@@ -265,6 +268,8 @@ class MainWindow(Gtk.ApplicationWindow):
 
         The result is always set, so the worker can never block forever.
         """
+        if threading.current_thread() is threading.main_thread():
+            raise RuntimeError("ask_confirm must run in a worker thread")
         result = [False]
         done = threading.Event()
 
@@ -279,7 +284,8 @@ class MainWindow(Gtk.ApplicationWindow):
             return False
 
         GLib.idle_add(show)
-        done.wait()
+        if not done.wait(_CONFIRM_WAIT_S):
+            return False
         return result[0]
 
     def _start(self, work: Callable[[], object], on_ok=None) -> None:
@@ -294,6 +300,8 @@ class MainWindow(Gtk.ApplicationWindow):
                 text = _error_text(error)
                 if isinstance(error, CheckpointError):
                     text += "\n\n" + tr("destroy_failed_hint")
+                elif isinstance(error, RollbackError):
+                    text += "\n\n" + tr("rollback_failed_hint")
                 self._show_error_dialog(text)
             elif on_ok:
                 on_ok(result)
@@ -335,7 +343,7 @@ class MainWindow(Gtk.ApplicationWindow):
             return
         self._start(lambda: self._apply(
             lambda: ops.edit_vlan_safe(self.nm, vlan.uuid, spec,
-                                       self.ask_confirm,
+                                       self.ask_confirm, active=vlan.active,
                                        **self._safe_kwargs()), spec),
             self._report)
 
@@ -357,6 +365,7 @@ class MainWindow(Gtk.ApplicationWindow):
 
         def work():
             return ops.delete_vlan_safe(self.nm, vlan.uuid, self.ask_confirm,
+                                        active=vlan.active,
                                         **self._safe_kwargs()), None
 
         self._start(work, self._report)
@@ -365,5 +374,14 @@ class MainWindow(Gtk.ApplicationWindow):
         vlan = self.selected_vlan()
         if vlan is None:
             return
-        action = self.nm.down if vlan.active else self.nm.up
-        self._start(lambda: action(vlan.uuid))
+        if not vlan.active:
+            # Activation is not reverted: a failure is reported as an error.
+            self._start(lambda: self.nm.up(vlan.uuid))
+            return
+
+        def work():
+            return ops.deactivate_vlan_safe(self.nm, vlan.uuid,
+                                            self.ask_confirm,
+                                            **self._safe_kwargs()), None
+
+        self._start(work, self._report)

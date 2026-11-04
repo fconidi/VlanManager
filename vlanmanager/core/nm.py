@@ -8,7 +8,8 @@ from typing import Callable
 
 from .model import IpConfig, Nic, Vlan, VlanSpec
 
-Runner = Callable[[list[str]], str]
+# run(argv, timeout_s=...) -> stdout; timeout_s is optional.
+Runner = Callable[..., str]
 
 _UUID_RE = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
@@ -24,29 +25,39 @@ def _sel(ident: str) -> list[str]:
 _CONN_FIELDS = ("vlan.parent,vlan.id,ipv4.method,ipv4.addresses,"
                 "ipv4.gateway,ipv4.dns,ipv6.method,ipv6.addresses,"
                 "ipv6.gateway,ipv6.dns,connection.autoconnect,"
-                "802-3-ethernet.mtu")
+                "802-3-ethernet.mtu,connection.id,connection.interface-name")
 
 
 NMCLI_TIMEOUT_S = 30
+# Seconds nmcli waits for an activation (DHCP can take about 45 s).
+ACTIVATION_TIMEOUT_S = 60
+# Extra time given to nmcli itself beyond its own activation wait.
+ACTIVATION_PROCESS_MARGIN_S = 10
+
+# nmcli exit status
+NMCLI_EXIT_TIMEOUT = 3
+NMCLI_EXIT_ACTIVATION_FAILED = 4
 
 
 class NmError(Exception):
-    def __init__(self, message: str):
+    def __init__(self, message: str, code: int | None = None):
         super().__init__(message)
         self.message = message
+        self.code = code  # nmcli exit status, None when nmcli did not answer
 
 
-def subprocess_runner(argv: list[str]) -> str:
+def subprocess_runner(argv: list[str],
+                      timeout_s: int = NMCLI_TIMEOUT_S) -> str:
     env = dict(os.environ, LC_ALL="C")
     try:
         proc = subprocess.run(["nmcli", *argv], capture_output=True,
-                              text=True, env=env, timeout=NMCLI_TIMEOUT_S)
+                              text=True, env=env, timeout=timeout_s)
     except FileNotFoundError:
         raise NmError("nmcli_missing") from None
     except subprocess.TimeoutExpired:
         raise NmError("nmcli_timeout") from None
     if proc.returncode != 0:
-        raise NmError(proc.stderr.strip())
+        raise NmError(proc.stderr.strip(), code=proc.returncode)
     return proc.stdout
 
 
@@ -78,6 +89,12 @@ def _lines(text: str) -> list[str]:
 def _first(value: str) -> str | None:
     first = value.split(",")[0].strip()
     return first or None
+
+
+def _getval(out: str) -> str:
+    """Value printed by `nmcli -g`, with its escaped colons restored."""
+    out = out.strip()
+    return split_terse(out)[0] if out else ""
 
 
 def _ip_config(f: dict[str, str], prefix: str) -> IpConfig:
@@ -162,11 +179,7 @@ class NmClient:
         return vlans
 
     def export_spec(self, ident: str) -> VlanSpec:
-        name = ident
-        if _UUID_RE.match(ident):
-            name = self._run(["-g", "connection.id", "connection", "show",
-                              *_sel(ident)]).strip() or ident
-        return self._parse_connection(name, self._read(ident))
+        return self._parse_connection(ident, self._read(ident))
 
     def gateway(self, iface: str) -> str | None:
         """Gateway of the active configuration of a device."""
@@ -175,7 +188,7 @@ class NmClient:
                 out = self._run(["-g", prop, "device", "show", iface])
             except NmError:
                 continue
-            value = out.strip()
+            value = _getval(out)
             if value and value != "--":
                 return value
         return None
@@ -191,15 +204,19 @@ class NmClient:
             f[parts[0]] = parts[1] if len(parts) > 1 else ""
         parent = f.get("vlan.parent", "")
         if _UUID_RE.match(parent):
-            iface = self._run(["-g", "connection.interface-name",
-                               "connection", "show", parent]).strip()
+            iface = _getval(self._run(["-g", "connection.interface-name",
+                                       "connection", "show", parent]))
             parent = iface or parent
         mtu_raw = f.get("802-3-ethernet.mtu", "").strip()
         mtu = int(mtu_raw) if mtu_raw.isdigit() and int(mtu_raw) > 0 else None
+        con_id = f.get("connection.id", "").strip() or name
+        # Without an explicit interface name, keep the connection name.
+        iface = f.get("connection.interface-name", "").strip() or con_id
         return VlanSpec(
             parent=parent,
             vlan_id=int(f.get("vlan.id") or 0),
-            name=name,
+            name=iface,
+            con_name=con_id if con_id != iface else None,
             ipv4=_ip_config(f, "ipv4"),
             ipv6=_ip_config(f, "ipv6"),
             autoconnect=f.get("connection.autoconnect", "yes") != "no",
@@ -207,7 +224,7 @@ class NmClient:
 
     def create_vlan(self, spec: VlanSpec) -> str:
         out = self._run(["connection", "add", "type", "vlan",
-                   "con-name", spec.name, "ifname", spec.name,
+                   "con-name", spec.connection_name, "ifname", spec.name,
                    "dev", spec.parent, "id", str(spec.vlan_id),
                    *_spec_to_args(spec)])
         found = _ADDED_UUID_RE.search(out or "")
@@ -215,19 +232,26 @@ class NmClient:
             raise NmError("connection UUID missing from nmcli output")
         return found.group(1)
 
-    def modify_vlan(self, ident: str, spec: VlanSpec) -> None:
+    def modify_vlan(self, ident: str, spec: VlanSpec,
+                    current: VlanSpec | None = None) -> None:
+        """Write spec over the connection; current is what is stored now."""
+        if current is None:
+            current = self.export_spec(ident)
         argv = ["connection", "modify", *_sel(ident),
                 "vlan.parent", spec.parent, "vlan.id", str(spec.vlan_id)]
-        if spec.name != ident:
-            argv += ["connection.id", spec.name,
-                     "connection.interface-name", spec.name]
+        if spec.connection_name != current.connection_name:
+            argv += ["connection.id", spec.connection_name]
+        if spec.name != current.name:
+            argv += ["connection.interface-name", spec.name]
         self._run(argv + _spec_to_args(spec, modify=True))
 
     def delete_vlan(self, ident: str) -> None:
         self._run(["connection", "delete", *_sel(ident)])
 
     def up(self, ident: str) -> None:
-        self._run(["connection", "up", *_sel(ident)])
+        self._run(["-w", str(ACTIVATION_TIMEOUT_S), "connection", "up",
+                   *_sel(ident)],
+                  timeout_s=ACTIVATION_TIMEOUT_S + ACTIVATION_PROCESS_MARGIN_S)
 
     def down(self, ident: str) -> None:
         self._run(["connection", "down", *_sel(ident)])

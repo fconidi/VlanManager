@@ -3,8 +3,9 @@ import unittest
 from vlanmanager.core.model import IpConfig, VlanSpec
 from vlanmanager.core.checkpoint import CheckpointError
 from vlanmanager.core.nm import NmError
-from vlanmanager.core.ops import (create_vlan_safe, delete_vlan_safe,
-                                  edit_vlan_safe)
+from vlanmanager.core import ops
+from vlanmanager.core.ops import (create_vlan_safe, deactivate_vlan_safe,
+                                  delete_vlan_safe, edit_vlan_safe)
 
 
 NEW_UUID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
@@ -14,13 +15,13 @@ class FakeNm:
     def __init__(self, exported=None, fail_up=False):
         self.calls = []
         self.exported = exported
-        self.fail_up = fail_up
+        self.fail_up = fail_up  # True, or an NmError to raise
 
     def create_vlan(self, spec):
         self.calls.append(("create_vlan", spec))
         return NEW_UUID
 
-    def modify_vlan(self, name, spec):
+    def modify_vlan(self, name, spec, current=None):
         self.calls.append(("modify_vlan", name, spec))
 
     def delete_vlan(self, name):
@@ -28,8 +29,13 @@ class FakeNm:
 
     def up(self, name):
         self.calls.append(("up", name))
+        if isinstance(self.fail_up, NmError):
+            raise self.fail_up
         if self.fail_up:
             raise NmError("activation failed")
+
+    def down(self, name):
+        self.calls.append(("down", name))
 
     def export_spec(self, name):
         return self.exported
@@ -114,6 +120,8 @@ class EditTest(unittest.TestCase):
 
 
 CP_PATH = "/org/freedesktop/NetworkManager/Checkpoint/7"
+# two bounded activation steps + 20 s confirm + 10 s margin
+CP_WINDOW = 150
 
 
 class FakeCheckpoints:
@@ -162,7 +170,7 @@ class CheckpointOpsTest(unittest.TestCase):
         nm, cp = _shared()
         self.assertTrue(create_vlan_safe(nm, NEW, lambda: True,
                                          checkpoints=cp))
-        self.assertEqual(nm.calls, [("cp_create", 60), ("create_vlan", NEW),
+        self.assertEqual(nm.calls, [("cp_create", CP_WINDOW), ("create_vlan", NEW),
                                     ("up", NEW_UUID),
                                     ("cp_adjust", CP_PATH, 30),
                                     ("cp_destroy", CP_PATH)])
@@ -171,7 +179,7 @@ class CheckpointOpsTest(unittest.TestCase):
         nm, cp = _shared()
         create_vlan_safe(nm, NEW, lambda: True, checkpoints=cp,
                          confirm_timeout_s=45)
-        self.assertEqual(nm.calls[0], ("cp_create", 85))
+        self.assertEqual(nm.calls[0], ("cp_create", 175))
         self.assertIn(("cp_adjust", CP_PATH, 55), nm.calls)
 
     def test_adjust_once_after_apply_before_confirm(self):
@@ -181,7 +189,7 @@ class CheckpointOpsTest(unittest.TestCase):
             nm.calls.append(("ask",))
             return True
         edit_vlan_safe(nm, "eth0.20", NEW, ask, checkpoints=cp)
-        self.assertEqual(nm.calls, [("cp_create", 60),
+        self.assertEqual(nm.calls, [("cp_create", CP_WINDOW),
                                     ("modify_vlan", "eth0.20", NEW),
                                     ("up", "eth0.30"),
                                     ("cp_adjust", CP_PATH, 30), ("ask",),
@@ -222,7 +230,7 @@ class CheckpointOpsTest(unittest.TestCase):
                                                 checkpoints=cp)):
             nm, cp = _shared()
             self.assertFalse(run(nm, cp))
-            self.assertEqual(nm.calls[0], ("cp_create", 60))
+            self.assertEqual(nm.calls[0], ("cp_create", CP_WINDOW))
             self.assertEqual(nm.calls[-1], ("cp_rollback", CP_PATH))
             self.assertNotIn(("cp_destroy", CP_PATH), nm.calls)
             # only the forward change happened, no in-process undo step
@@ -235,7 +243,7 @@ class CheckpointOpsTest(unittest.TestCase):
         nm.fail_up = True
         with self.assertRaises(NmError):
             create_vlan_safe(nm, NEW, lambda: True, checkpoints=cp)
-        self.assertEqual(nm.calls, [("cp_create", 60), ("create_vlan", NEW),
+        self.assertEqual(nm.calls, [("cp_create", CP_WINDOW), ("create_vlan", NEW),
                                     ("up", NEW_UUID),
                                     ("cp_rollback", CP_PATH)])
 
@@ -246,7 +254,7 @@ class CheckpointOpsTest(unittest.TestCase):
             raise ValueError("dialog failed")
         with self.assertRaises(ValueError):
             delete_vlan_safe(nm, "eth0.20", ask, checkpoints=cp)
-        self.assertEqual(nm.calls, [("cp_create", 60),
+        self.assertEqual(nm.calls, [("cp_create", CP_WINDOW),
                                     ("delete_vlan", "eth0.20"),
                                     ("cp_adjust", CP_PATH, 30),
                                     ("cp_rollback", CP_PATH)])
@@ -276,9 +284,136 @@ class CheckpointOpsTest(unittest.TestCase):
         cp = FakeCheckpoints(fail_create=True, log=nm.calls)
         self.assertFalse(delete_vlan_safe(nm, "eth0.20", lambda: False,
                                           checkpoints=cp))
-        self.assertEqual(nm.calls, [("cp_create", 60),
+        self.assertEqual(nm.calls, [("cp_create", CP_WINDOW),
                                     ("delete_vlan", "eth0.20"),
                                     ("create_vlan", OLD), ("up", NEW_UUID)])
+
+
+    def test_checkpoint_window_covers_two_activations(self):
+        self.assertEqual(CP_WINDOW, 2 * ops.ACTIVATION_TIMEOUT_S
+                         + ops.CONFIRM_TIMEOUT_S + ops.CHECKPOINT_MARGIN_S)
+
+
+SOFT_TIMEOUT = NmError("Error: Timeout expired.", code=3)
+SOFT_FAILED = NmError("Error: Connection activation failed.", code=4)
+HARD = NmError("Error: Not authorized.", code=1)
+
+
+class ActivationFailureTest(unittest.TestCase):
+    def _asked(self):
+        asked = []
+
+        def ask():
+            asked.append(1)
+            return True
+        return asked, ask
+
+    def test_soft_up_failure_on_create_continues_to_confirm(self):
+        for err in (SOFT_TIMEOUT, SOFT_FAILED):
+            for with_cp in (False, True):
+                nm = FakeNm(exported=OLD, fail_up=err)
+                cp = FakeCheckpoints(log=nm.calls) if with_cp else None
+                asked, ask = self._asked()
+                self.assertTrue(create_vlan_safe(nm, NEW, ask,
+                                                 checkpoints=cp))
+                self.assertEqual(asked, [1])
+                self.assertNotIn("delete_vlan", nm.names())
+                self.assertNotIn("cp_rollback", nm.names())
+
+    def test_soft_up_failure_on_edit_continues_to_confirm(self):
+        for err in (SOFT_TIMEOUT, SOFT_FAILED):
+            nm = FakeNm(exported=OLD, fail_up=err)
+            cp = FakeCheckpoints(log=nm.calls)
+            asked, ask = self._asked()
+            self.assertTrue(edit_vlan_safe(nm, "eth0.20", NEW, ask,
+                                           checkpoints=cp))
+            self.assertEqual(asked, [1])
+            self.assertNotIn("cp_rollback", nm.names())
+
+    def test_hard_up_failure_rolls_back(self):
+        nm = FakeNm(exported=OLD, fail_up=HARD)
+        asked, ask = self._asked()
+        with self.assertRaises(NmError):
+            create_vlan_safe(nm, NEW, ask)
+        self.assertEqual(asked, [])
+        self.assertEqual(nm.calls[-1], ("delete_vlan", NEW_UUID))
+        nm = FakeNm(exported=OLD, fail_up=HARD)
+        cp = FakeCheckpoints(log=nm.calls)
+        with self.assertRaises(NmError):
+            edit_vlan_safe(nm, "eth0.20", NEW, ask, checkpoints=cp)
+        self.assertEqual(asked, [])
+        self.assertEqual(nm.calls[-1], ("cp_rollback", CP_PATH))
+
+
+class InactiveVlanTest(unittest.TestCase):
+    def _run(self, op):
+        nm = FakeNm(exported=OLD)
+        cp = FakeCheckpoints(log=nm.calls)
+        result = op(nm, cp)
+        self.assertFalse([c for c in nm.calls if c[0].startswith("cp_")])
+        return nm, result
+
+    def test_delete_inactive_uses_inprocess_undo_without_up(self):
+        nm, result = self._run(lambda nm, cp: delete_vlan_safe(
+            nm, "eth0.20", lambda: False, checkpoints=cp, active=False))
+        self.assertFalse(result)
+        self.assertEqual(nm.calls, [("delete_vlan", "eth0.20"),
+                                    ("create_vlan", OLD)])
+
+    def test_edit_inactive_uses_inprocess_undo_without_up(self):
+        nm, result = self._run(lambda nm, cp: edit_vlan_safe(
+            nm, "eth0.20", NEW, lambda: False, checkpoints=cp, active=False))
+        self.assertFalse(result)
+        self.assertEqual(nm.calls, [("modify_vlan", "eth0.20", NEW),
+                                    ("modify_vlan", "eth0.30", OLD)])
+
+    def test_edit_inactive_confirmed_does_not_activate(self):
+        nm, result = self._run(lambda nm, cp: edit_vlan_safe(
+            nm, "eth0.20", NEW, lambda: True, checkpoints=cp, active=False))
+        self.assertTrue(result)
+        self.assertNotIn("up", nm.names())
+
+    def test_active_still_uses_checkpoint(self):
+        for op in (lambda nm, cp: delete_vlan_safe(
+                       nm, "eth0.20", lambda: True, checkpoints=cp,
+                       active=True),
+                   lambda nm, cp: edit_vlan_safe(
+                       nm, "eth0.20", NEW, lambda: True, checkpoints=cp,
+                       active=True)):
+            nm = FakeNm(exported=OLD)
+            cp = FakeCheckpoints(log=nm.calls)
+            self.assertTrue(op(nm, cp))
+            self.assertEqual(nm.calls[0], ("cp_create", CP_WINDOW))
+            self.assertEqual(nm.calls[-1], ("cp_destroy", CP_PATH))
+
+    def test_edit_uses_connection_name_to_follow_rename(self):
+        old = VlanSpec("enp3s0", 10, "enp3s0.10", con_name="VLAN connection 1")
+        new = VlanSpec("enp3s0", 10, "vlan10", con_name="VLAN connection 1")
+        nm = FakeNm(exported=old)
+        edit_vlan_safe(nm, "VLAN connection 1", new, lambda: True)
+        self.assertEqual(nm.calls[-1], ("up", "VLAN connection 1"))
+
+
+class DeactivateTest(unittest.TestCase):
+    def test_confirmed_keeps_it_down(self):
+        nm = FakeNm()
+        self.assertTrue(deactivate_vlan_safe(nm, NEW_UUID, lambda: True))
+        self.assertEqual(nm.calls, [("down", NEW_UUID)])
+
+    def test_not_confirmed_brings_it_up_again(self):
+        nm = FakeNm()
+        self.assertFalse(deactivate_vlan_safe(nm, NEW_UUID, lambda: False))
+        self.assertEqual(nm.calls, [("down", NEW_UUID), ("up", NEW_UUID)])
+
+    def test_uses_checkpoint_when_available(self):
+        nm = FakeNm()
+        cp = FakeCheckpoints(log=nm.calls)
+        self.assertFalse(deactivate_vlan_safe(nm, NEW_UUID, lambda: False,
+                                              checkpoints=cp))
+        self.assertEqual(nm.calls, [("cp_create", CP_WINDOW),
+                                    ("down", NEW_UUID),
+                                    ("cp_adjust", CP_PATH, 30),
+                                    ("cp_rollback", CP_PATH)])
 
 
 if __name__ == "__main__":

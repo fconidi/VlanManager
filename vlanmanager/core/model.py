@@ -21,11 +21,17 @@ class IpConfig:
 class VlanSpec:
     parent: str
     vlan_id: int
-    name: str
+    name: str  # kernel interface name
     ipv4: IpConfig = IpConfig()
     ipv6: IpConfig = IpConfig()
     autoconnect: bool = True
     mtu: int | None = None
+    # NetworkManager connection name, when it differs from the interface name
+    con_name: str | None = None
+
+    @property
+    def connection_name(self) -> str:
+        return self.con_name or self.name
 
 
 @dataclass(frozen=True)

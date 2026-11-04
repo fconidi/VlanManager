@@ -80,6 +80,35 @@ def _ip_config(f: dict[str, str], prefix: str) -> IpConfig:
                     dns=dns)
 
 
+def _ip_args(prefix: str, cfg: IpConfig) -> list[str]:
+    args = [prefix + ".method", cfg.method]
+    if cfg.method == "manual":
+        args += [prefix + ".addresses", cfg.address or "",
+                 prefix + ".gateway", cfg.gateway or "",
+                 prefix + ".dns", ",".join(cfg.dns)]
+    return args
+
+
+def _spec_to_args(spec: VlanSpec, modify: bool = False) -> list[str]:
+    """Property arguments shared by `connection add` and `connection modify`.
+
+    When modifying, values that are no longer set are sent as empty strings
+    so that NetworkManager clears them.
+    """
+    args: list[str] = []
+    for prefix, cfg in (("ipv4", spec.ipv4), ("ipv6", spec.ipv6)):
+        args += _ip_args(prefix, cfg)
+        if modify and cfg.method != "manual":
+            args += [prefix + ".addresses", "", prefix + ".gateway", "",
+                     prefix + ".dns", ""]
+    args += ["connection.autoconnect", "yes" if spec.autoconnect else "no"]
+    if spec.mtu is not None:
+        args += ["802-3-ethernet.mtu", str(spec.mtu)]
+    elif modify:
+        args += ["802-3-ethernet.mtu", "0"]
+    return args
+
+
 class NmClient:
     def __init__(self, run: Runner = subprocess_runner):
         self._run = run
@@ -152,3 +181,26 @@ class NmClient:
             ipv6=_ip_config(f, "ipv6"),
             autoconnect=f.get("connection.autoconnect", "yes") != "no",
             mtu=mtu)
+
+    def create_vlan(self, spec: VlanSpec) -> None:
+        self._run(["connection", "add", "type", "vlan",
+                   "con-name", spec.name, "ifname", spec.name,
+                   "dev", spec.parent, "id", str(spec.vlan_id),
+                   *_spec_to_args(spec)])
+
+    def modify_vlan(self, name: str, spec: VlanSpec) -> None:
+        argv = ["connection", "modify", name,
+                "vlan.parent", spec.parent, "vlan.id", str(spec.vlan_id)]
+        if spec.name != name:
+            argv += ["connection.id", spec.name,
+                     "connection.interface-name", spec.name]
+        self._run(argv + _spec_to_args(spec, modify=True))
+
+    def delete_vlan(self, name: str) -> None:
+        self._run(["connection", "delete", name])
+
+    def up(self, name: str) -> None:
+        self._run(["connection", "up", name])
+
+    def down(self, name: str) -> None:
+        self._run(["connection", "down", name])

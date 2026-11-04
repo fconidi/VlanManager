@@ -127,3 +127,72 @@ class NmClientTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WriteRunner:
+    def __init__(self, error=None):
+        self.calls = []
+        self.error = error
+
+    def __call__(self, argv):
+        self.calls.append(list(argv))
+        if self.error:
+            raise self.error
+        return ""
+
+
+class NmWriteTest(unittest.TestCase):
+    def test_create_vlan_dhcp(self):
+        r = WriteRunner()
+        NmClient(r).create_vlan(VlanSpec("eth0", 20, "eth0.20"))
+        self.assertEqual(r.calls, [[
+            "connection", "add", "type", "vlan", "con-name", "eth0.20",
+            "ifname", "eth0.20", "dev", "eth0", "id", "20",
+            "ipv4.method", "auto", "ipv6.method", "auto",
+            "connection.autoconnect", "yes"]])
+
+    def test_create_vlan_static(self):
+        r = WriteRunner()
+        spec = VlanSpec("eth0", 20, "eth0.20", ipv4=IpConfig(
+            "manual", "192.168.20.5/24", "192.168.20.1",
+            ("1.1.1.1", "9.9.9.9")))
+        NmClient(r).create_vlan(spec)
+        argv = r.calls[0]
+        i = argv.index("ipv4.method")
+        self.assertEqual(argv[i:i + 8], [
+            "ipv4.method", "manual", "ipv4.addresses", "192.168.20.5/24",
+            "ipv4.gateway", "192.168.20.1", "ipv4.dns", "1.1.1.1,9.9.9.9"])
+
+    def test_create_with_mtu_adds_802_3_ethernet_mtu(self):
+        r = WriteRunner()
+        NmClient(r).create_vlan(VlanSpec("eth0", 20, "eth0.20", mtu=1400))
+        argv = r.calls[0]
+        i = argv.index("802-3-ethernet.mtu")
+        self.assertEqual(argv[i + 1], "1400")
+
+    def test_delete_vlan(self):
+        r = WriteRunner()
+        NmClient(r).delete_vlan("eth0.20")
+        self.assertEqual(r.calls, [["connection", "delete", "eth0.20"]])
+
+    def test_modify_clears_removed_values(self):
+        r = WriteRunner()
+        NmClient(r).modify_vlan("eth0.20", VlanSpec("eth0", 20, "eth0.20"))
+        argv = r.calls[0]
+        self.assertEqual(argv[:3], ["connection", "modify", "eth0.20"])
+        for key in ("ipv4.addresses", "ipv4.gateway", "ipv4.dns"):
+            self.assertEqual(argv[argv.index(key) + 1], "")
+
+    def test_up_down_argv(self):
+        r = WriteRunner()
+        c = NmClient(r)
+        c.up("eth0.20")
+        c.down("eth0.20")
+        self.assertEqual(r.calls, [["connection", "up", "eth0.20"],
+                                   ["connection", "down", "eth0.20"]])
+
+    def test_error_propagates_with_message(self):
+        c = NmClient(WriteRunner(NmError("Not authorized")))
+        with self.assertRaises(NmError) as cm:
+            c.delete_vlan("eth0.20")
+        self.assertEqual(cm.exception.message, "Not authorized")

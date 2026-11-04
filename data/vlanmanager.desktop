@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=VlanManager
+Comment=Create and manage 802.1Q VLANs on wired network interfaces
+Comment[it]=Crea e gestisci VLAN 802.1Q sulle interfacce di rete cablate
+Exec=python3 -m vlanmanager
+Icon=network-wired
+Terminal=false
+Categories=Settings;Network;
+Keywords=vlan;802.1Q;network;ethernet;NetworkManager;

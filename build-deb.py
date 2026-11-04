@@ -42,8 +42,14 @@ def main(argv=None) -> int:
         for name in MODULES:
             install(package / name, f"usr/share/vlanmanager/vlanmanager/{name}")
         install(source / "packaging/vlanmanager", "usr/bin/vlanmanager", True)
-        install(source / "data/vlanmanager.desktop",
-                "usr/share/applications/vlanmanager.desktop")
+        install(source / "packaging/org.syslinuxos.VlanManager.desktop",
+                "usr/share/applications/org.syslinuxos.VlanManager.desktop")
+        install(source / "packaging/org.syslinuxos.VlanManager.menu",
+                "etc/xdg/menus/applications-merged/"
+                "org.syslinuxos.VlanManager.menu")
+        install(source / "data/org.syslinuxos.VlanManager.svg",
+                "usr/share/icons/hicolor/scalable/apps/"
+                "org.syslinuxos.VlanManager.svg")
         for name in ("README.md", "CHANGELOG.md", "LICENSE"):
             install(source / name, f"usr/share/doc/vlanmanager/{name}")
         control = root / "DEBIAN"

@@ -1,10 +1,14 @@
 [Desktop Entry]
 Type=Application
 Name=VlanManager
+Name[it]=VlanManager
+GenericName=VLAN manager
+GenericName[it]=Gestione VLAN
 Comment=Create and manage 802.1Q VLANs on wired network interfaces
 Comment[it]=Crea e gestisci VLAN 802.1Q sulle interfacce di rete cablate
 Exec=vlanmanager
-Icon=network-wired
+Icon=org.syslinuxos.VlanManager
 Terminal=false
-Categories=Settings;Network;
+Categories=Network;X-SysLinuxOS-Networking;
 Keywords=vlan;802.1Q;network;ethernet;NetworkManager;
+StartupNotify=true

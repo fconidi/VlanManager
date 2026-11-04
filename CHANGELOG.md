@@ -8,3 +8,4 @@
 - Reachability check of the gateway through the VLAN interface.
 - Automatic revert of unconfirmed changes, performed by NetworkManager through a checkpoint, with an in-app fallback.
 - Italian and English interface.
+- Menu entries in Network and in SysLinuxOS Tools, with its own icon.

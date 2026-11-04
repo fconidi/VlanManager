@@ -1,17 +1,20 @@
 """Main window: NICs with their VLANs, and the toolbar."""
 from __future__ import annotations
 
+import threading
 from typing import Callable
 
 import gi
 
 gi.require_version("Gtk", "3.0")
-from gi.repository import Gtk  # noqa: E402
+from gi.repository import GLib, Gtk  # noqa: E402
 
-from ..core import probe  # noqa: E402
-from ..core.model import Nic, Vlan  # noqa: E402
+from ..core import ops, probe  # noqa: E402
+from ..core.checkpoint import CheckpointError, NmCheckpoints  # noqa: E402
+from ..core.model import Nic, Vlan, VlanSpec  # noqa: E402
 from ..core.nm import NmClient, NmError  # noqa: E402
 from ..i18n import tr  # noqa: E402
+from . import dialogs  # noqa: E402
 from .worker import run_async  # noqa: E402
 
 _NM_CODES = ("nmcli_missing", "nmcli_timeout")
@@ -34,6 +37,7 @@ class MainWindow(Gtk.ApplicationWindow):
         super().__init__(application=app, title=tr("window_title"))
         self.nm = nm
         self.loaded = False
+        self._busy = False
         self.nics: list[Nic] = []
         self.vlans: list[Vlan] = []
         self.set_default_size(720, 440)
@@ -65,15 +69,26 @@ class MainWindow(Gtk.ApplicationWindow):
         self.btn_add = Gtk.Button(label=tr("btn_add"))
         self.btn_edit = Gtk.Button(label=tr("btn_edit"))
         self.btn_delete = Gtk.Button(label=tr("btn_delete"))
+        self.btn_toggle = Gtk.Button(label=tr("btn_deactivate"))
         self.btn_refresh = Gtk.Button(label=tr("btn_refresh"))
         for b in (self.btn_add, self.btn_edit, self.btn_delete,
-                  self.btn_refresh):
+                  self.btn_toggle, self.btn_refresh):
             bar.pack_start(b, False, False, 0)
         main.pack_start(bar, False, False, 0)
         self.btn_add.connect("clicked", self._on_add)
         self.btn_edit.connect("clicked", self._on_edit)
         self.btn_delete.connect("clicked", self._on_delete)
+        self.btn_toggle.connect("clicked", self._on_toggle)
         self.btn_refresh.connect("clicked", lambda _b: self.refresh())
+
+        self.info_bar = Gtk.InfoBar(message_type=Gtk.MessageType.INFO,
+                                    revealed=False, no_show_all=True,
+                                    show_close_button=True)
+        self.info_label = Gtk.Label(wrap=True, xalign=0)
+        self.info_bar.get_content_area().add(self.info_label)
+        self.info_bar.get_content_area().show_all()
+        self.info_bar.connect("response", lambda b, _r: b.set_revealed(False))
+        main.pack_start(self.info_bar, False, False, 0)
 
         self.tree = Gtk.TreeView(model=self.store)
         self.tree.set_tooltip_column(self.COL_TOOLTIP)
@@ -198,26 +213,153 @@ class MainWindow(Gtk.ApplicationWindow):
         row = self._selected_row()
         is_vlan = bool(row) and row[self.COL_KIND] == "vlan"
         managed = True if row is None else row[self.COL_MANAGED]
-        self.btn_add.set_sensitive(managed)
-        self.btn_edit.set_sensitive(is_vlan and managed)
-        self.btn_delete.set_sensitive(is_vlan and managed)
+        idle = not self._busy
+        self.btn_add.set_sensitive(idle and managed)
+        self.btn_edit.set_sensitive(idle and is_vlan and managed)
+        self.btn_delete.set_sensitive(idle and is_vlan and managed)
+        self.btn_toggle.set_sensitive(idle and is_vlan and managed)
+        vlan = self.selected_vlan()
+        self.btn_toggle.set_label(tr("btn_deactivate" if vlan and vlan.active
+                                     else "btn_activate"))
 
-    # actions (completed together with the dialogs)
+    def _parent_of_selection(self) -> str | None:
+        vlan = self.selected_vlan()
+        if vlan:
+            return vlan.spec.parent
+        row = self._selected_row()
+        return row[self.COL_NAME] if row else None
+
+    # messages
+
+    def _show_info(self, text: str, kind=Gtk.MessageType.INFO) -> None:
+        self.info_bar.set_message_type(kind)
+        self.info_label.set_text(text)
+        self.info_bar.show()
+        self.info_bar.set_revealed(True)
+
+    def _show_error_dialog(self, text: str) -> None:
+        dlg = Gtk.MessageDialog(transient_for=self, modal=True,
+                                message_type=Gtk.MessageType.ERROR,
+                                buttons=Gtk.ButtonsType.CLOSE, text=text)
+        dlg.set_title(tr("dialog_error_title"))
+        dlg.connect("response", lambda d, _r: d.destroy())
+        dlg.show()
+
+    def _confirm_delete(self, name: str) -> bool:
+        dlg = Gtk.MessageDialog(transient_for=self, modal=True,
+                                message_type=Gtk.MessageType.QUESTION,
+                                text=tr("confirm_delete"),
+                                secondary_text=name)
+        dlg.set_title(tr("dialog_delete_title"))
+        dlg.add_button(tr("btn_cancel"), Gtk.ResponseType.CANCEL)
+        dlg.add_button(tr("btn_delete"), Gtk.ResponseType.OK)
+        try:
+            return dlg.run() == Gtk.ResponseType.OK
+        finally:
+            dlg.destroy()
+
+    # operations
+
+    def ask_confirm(self) -> bool:
+        """Show the confirm dialog from a worker thread and wait for it.
+
+        The result is always set, so the worker can never block forever.
+        """
+        result = [False]
+        done = threading.Event()
+
+        def show() -> bool:
+            try:
+                result[0] = bool(dialogs.ConfirmDialog(
+                    self, ops.CONFIRM_TIMEOUT_S).ask())
+            except Exception:
+                result[0] = False
+            finally:
+                done.set()
+            return False
+
+        GLib.idle_add(show)
+        done.wait()
+        return result[0]
+
+    def _start(self, work: Callable[[], object], on_ok=None) -> None:
+        self._busy = True
+        self._update_buttons()
+
+        def finished(result, error) -> None:
+            self._busy = False
+            self.refresh()  # UUIDs may have changed, whatever the outcome
+            self._update_buttons()
+            if error is not None:
+                text = _error_text(error)
+                if isinstance(error, CheckpointError):
+                    text += "\n\n" + tr("destroy_failed_hint")
+                self._show_error_dialog(text)
+            elif on_ok:
+                on_ok(result)
+
+        run_async(work, finished)
+
+    def _safe_kwargs(self) -> dict:
+        return dict(checkpoints=NmCheckpoints(),
+                    confirm_timeout_s=ops.CONFIRM_TIMEOUT_S)
+
+    def _report(self, result) -> None:
+        confirmed, reason = result
+        if not confirmed:
+            self._show_info(tr("op_reverted"), Gtk.MessageType.WARNING)
+        elif reason:
+            self._show_info(tr(reason), Gtk.MessageType.INFO
+                            if reason == "ok" else Gtk.MessageType.WARNING)
 
     def _on_add(self, _btn) -> None:
-        try:
-            from . import dialogs  # noqa: F401
-        except ImportError:
+        dlg = dialogs.VlanDialog(self, self.nics,
+                                 [v.spec for v in self.vlans],
+                                 preselect=self._parent_of_selection())
+        spec = dlg.run_and_get()
+        if spec is None:
             return
+        self._start(lambda: self._apply(
+            lambda: ops.create_vlan_safe(self.nm, spec, self.ask_confirm,
+                                         **self._safe_kwargs()), spec),
+            self._report)
 
     def _on_edit(self, _btn) -> None:
-        try:
-            from . import dialogs  # noqa: F401
-        except ImportError:
+        vlan = self.selected_vlan()
+        if vlan is None:
             return
+        others = [v.spec for v in self.vlans]
+        dlg = dialogs.VlanDialog(self, self.nics, others, editing=vlan.spec)
+        spec = dlg.run_and_get()
+        if spec is None:
+            return
+        self._start(lambda: self._apply(
+            lambda: ops.edit_vlan_safe(self.nm, vlan.uuid, spec,
+                                       self.ask_confirm,
+                                       **self._safe_kwargs()), spec),
+            self._report)
+
+    def _apply(self, op: Callable[[], bool], spec: VlanSpec):
+        """Worker: run the operation, then check the new VLAN works."""
+        confirmed = op()
+        if not confirmed:
+            return False, None
+        return True, probe.verify_vlan(self.nm, spec.name)[1]
 
     def _on_delete(self, _btn) -> None:
-        try:
-            from . import dialogs  # noqa: F401
-        except ImportError:
+        vlan = self.selected_vlan()
+        if vlan is None or not self._confirm_delete(vlan.spec.name):
             return
+
+        def work():
+            return ops.delete_vlan_safe(self.nm, vlan.uuid, self.ask_confirm,
+                                        **self._safe_kwargs()), None
+
+        self._start(work, self._report)
+
+    def _on_toggle(self, _btn) -> None:
+        vlan = self.selected_vlan()
+        if vlan is None:
+            return
+        action = self.nm.down if vlan.active else self.nm.up
+        self._start(lambda: action(vlan.uuid))

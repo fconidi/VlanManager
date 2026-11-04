@@ -11,6 +11,8 @@ from .rollback import run_with_rollback
 # NetworkManager reverts on its own this long after the confirm dialog
 # would have expired, so the dialog always decides first.
 CHECKPOINT_MARGIN_S = 10
+# Seconds the user has to confirm a change before it is reverted.
+CONFIRM_TIMEOUT_S = 20
 
 
 def _nm_rollback(cp: NmCheckpoints, path: str,
@@ -63,7 +65,7 @@ def _checkpoint(cp: NmCheckpoints | None,
 def create_vlan_safe(nm: NmClient, spec: VlanSpec,
                      ask_confirm: Callable[[], bool],
                      checkpoints: NmCheckpoints | None = None,
-                     confirm_timeout_s: int = 20) -> bool:
+                     confirm_timeout_s: int = CONFIRM_TIMEOUT_S) -> bool:
     path = _checkpoint(checkpoints, confirm_timeout_s)
     if path is not None:
         return _run_with_checkpoint(checkpoints, path,
@@ -77,7 +79,7 @@ def create_vlan_safe(nm: NmClient, spec: VlanSpec,
 def edit_vlan_safe(nm: NmClient, name: str, spec: VlanSpec,
                    ask_confirm: Callable[[], bool],
                    checkpoints: NmCheckpoints | None = None,
-                   confirm_timeout_s: int = 20) -> bool:
+                   confirm_timeout_s: int = CONFIRM_TIMEOUT_S) -> bool:
     old = nm.export_spec(name)
     by_uuid = _UUID_RE.match(name) is not None
     current = [name]  # identifier of the connection as it is right now
@@ -104,7 +106,7 @@ def edit_vlan_safe(nm: NmClient, name: str, spec: VlanSpec,
 def delete_vlan_safe(nm: NmClient, name: str,
                      ask_confirm: Callable[[], bool],
                      checkpoints: NmCheckpoints | None = None,
-                     confirm_timeout_s: int = 20) -> bool:
+                     confirm_timeout_s: int = CONFIRM_TIMEOUT_S) -> bool:
     old = nm.export_spec(name)
     deleted = [False]
 

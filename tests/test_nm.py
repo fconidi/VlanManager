@@ -125,10 +125,6 @@ class NmClientTest(unittest.TestCase):
         self.assertTrue(NmClient(r).is_running())
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class WriteRunner:
     def __init__(self, error=None):
         self.calls = []
@@ -196,3 +192,7 @@ class NmWriteTest(unittest.TestCase):
         with self.assertRaises(NmError) as cm:
             c.delete_vlan("eth0.20")
         self.assertEqual(cm.exception.message, "Not authorized")
+
+
+if __name__ == "__main__":
+    unittest.main()

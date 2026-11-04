@@ -18,6 +18,7 @@ interfaces through NetworkManager. Made for SysLinuxOS and Debian-based systems.
 - `python3`
 - `python3-gi` and `gir1.2-gtk-3.0`
 - `network-manager`
+- `iputils-ping`
 - the `8021q` kernel module
 
 ## Run
@@ -31,11 +32,13 @@ interfaces through NetworkManager. Made for SysLinuxOS and Debian-based systems.
 - Untagged traffic stays on the base connection (the native VLAN).
 - Interfaces not managed by NetworkManager are shown but not modified.
 - Some network cards and drivers handle VLAN tags or a larger MTU poorly.
-- Permissions come from polkit through NetworkManager. The application never
-  runs as root.
-- The revert checkpoint covers all network devices for the confirmation window
-  (about 30 seconds), so other network changes made in that window are
-  reverted too.
+- Permissions come from polkit through NetworkManager. The application does
+  not need root privileges.
+- The revert checkpoint covers all network devices. After a change is applied,
+  the revert window is the confirmation time (20 seconds) plus about 10
+  seconds of margin; while the change is being applied NetworkManager keeps a
+  longer safety timer. Other network changes made in that window are reverted
+  too.
 
 ## License
 

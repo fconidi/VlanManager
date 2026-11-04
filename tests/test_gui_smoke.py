@@ -23,6 +23,7 @@ class FakeNm:
     def __init__(self, running=True, nics=None, vlans=None, error=None):
         self.running = running
         self.error = error
+        self.calls = []
         self.nics = nics if nics is not None else [
             Nic("eth0", "aa:bb:cc:dd:ee:01", "connected", True),
             Nic("eth1", "aa:bb:cc:dd:ee:02", "unmanaged", False)]
@@ -32,6 +33,7 @@ class FakeNm:
                  "uuid-1", True)]
 
     def is_running(self):
+        self.calls.append(("is_running", threading.get_ident()))
         return self.running
 
     def list_nics(self):
@@ -125,11 +127,30 @@ class MainWindowTests(unittest.TestCase):
 
     def test_nm_not_running_shows_error_bar(self):
         win = self.make(FakeNm(running=False), wait=False)
+        self.assertTrue(pump(
+            lambda: win.stack.get_visible_child_name() == "error"))
         self.assertEqual(win.stack.get_visible_child_name(), "error")
         self.assertEqual(win.error_label.get_text(), tr("nm_not_running"))
 
+    def test_is_running_not_called_on_main_thread(self):
+        nm = FakeNm()
+        win = self.make(nm)
+        self.assertTrue(nm.calls)
+        self.assertNotIn(threading.get_ident(), [t for _, t in nm.calls])
+
+    def test_retry_recovers_from_error_page(self):
+        nm = FakeNm(error=NmError("nmcli_timeout"))
+        win = self.make(nm, wait=False)
+        self.assertTrue(pump(
+            lambda: win.stack.get_visible_child_name() == "error"))
+        nm.error = None
+        win.btn_retry.clicked()
+        self.assertTrue(pump(lambda: win.loaded))
+        self.assertEqual(win.stack.get_visible_child_name(), "main")
+        self.assertEqual(tree_rows(win), ["eth0", "eth0.20", "eth1"])
+
     def test_nmcli_missing_shows_error_bar(self):
-        win = self.make(FakeNm(error=NmError("nmcli_missing")), wait=False)
+        win = self.make(FakeNm(running=False, error=NmError("nmcli_missing")), wait=False)
         self.assertTrue(pump(
             lambda: win.stack.get_visible_child_name() == "error"))
         self.assertEqual(win.error_label.get_text(), tr("nmcli_missing"))

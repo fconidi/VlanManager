@@ -42,9 +42,6 @@ class MainWindow(Gtk.ApplicationWindow):
         self._build()
         self._update_buttons()
 
-        if not nm.is_running():
-            self._show_error(tr("nm_not_running"))
-            return
         run_async(check_8021q, self._on_module_checked)
         self.refresh()
 
@@ -98,6 +95,9 @@ class MainWindow(Gtk.ApplicationWindow):
         info = Gtk.InfoBar(message_type=Gtk.MessageType.ERROR, revealed=True)
         self.error_label = Gtk.Label(wrap=True)
         info.get_content_area().add(self.error_label)
+        self.btn_retry = Gtk.Button(label=tr("btn_retry"))
+        self.btn_retry.connect("clicked", lambda _b: self.refresh())
+        info.add_action_widget(self.btn_retry, Gtk.ResponseType.NONE)
         err.pack_start(info, False, False, 0)
         self.stack.add_named(err, "error")
         self.show_all()
@@ -111,8 +111,17 @@ class MainWindow(Gtk.ApplicationWindow):
     # data
 
     def refresh(self) -> None:
-        def load() -> tuple[list[Nic], list[Vlan]]:
-            return self.nm.list_nics(), self.nm.list_vlans()
+        def load() -> tuple[bool, list[Nic], list[Vlan]]:
+            if not self.nm.is_running():
+                # is_running hides failures; let a missing or hung nmcli
+                # surface as its own error instead of "not running".
+                try:
+                    self.nm.list_nics()
+                except NmError as exc:
+                    if exc.message in _NM_CODES:
+                        raise
+                return False, [], []
+            return True, self.nm.list_nics(), self.nm.list_vlans()
 
         run_async(load, self._on_loaded)
 
@@ -120,7 +129,10 @@ class MainWindow(Gtk.ApplicationWindow):
         if error is not None:
             self._show_error(_error_text(error))
             return
-        self.nics, self.vlans = result
+        running, self.nics, self.vlans = result
+        if not running:
+            self._show_error(tr("nm_not_running"))
+            return
         self.stack.set_visible_child_name("main")
         self._fill()
         self.loaded = True

@@ -54,6 +54,8 @@ _EN = {
                           "automatically in {seconds} seconds."),
     "confirm_delete": "Delete this VLAN? The connection will be removed.",
     "tooltip_unmanaged": "This interface is not managed by NetworkManager.",
+    "state_active": "Active",
+    "state_inactive": "Inactive",
     "nm_not_running": "NetworkManager is not running.",
     "warn_8021q_missing": ("The 8021q kernel module is not available; "
                            "VLANs cannot be created."),
@@ -112,6 +114,8 @@ _IT = {
                           "ripristinata automaticamente tra {seconds} secondi."),
     "confirm_delete": "Eliminare questa VLAN? La connessione verrà rimossa.",
     "tooltip_unmanaged": "Questa interfaccia non è gestita da NetworkManager.",
+    "state_active": "Attiva",
+    "state_inactive": "Inattiva",
     "nm_not_running": "NetworkManager non è in esecuzione.",
     "warn_8021q_missing": ("Il modulo del kernel 8021q non è disponibile; "
                            "non è possibile creare VLAN."),

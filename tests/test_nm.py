@@ -12,6 +12,13 @@ def conn_argv(name):
     return ("-t", "-f", CONN_FIELDS, "connection", "show", name)
 
 
+UUID = "11111111-2222-3333-4444-555555555555"
+
+
+def conn_argv_uuid(uuid):
+    return ("-t", "-f", CONN_FIELDS, "connection", "show", "uuid", uuid)
+
+
 class FakeRunner:
     def __init__(self, outputs):
         self.outputs = outputs
@@ -111,9 +118,36 @@ class NmClientTest(unittest.TestCase):
         self.assertEqual(spec.mtu, 1400)
         self.assertFalse(spec.autoconnect)
 
-    def test_gateway(self):
-        r = FakeRunner({conn_argv("eth0.20"): STATIC})
-        self.assertEqual(NmClient(r).gateway("eth0.20"), "192.168.20.1")
+    def test_gateway_reads_active_config_not_profile(self):
+        r = FakeRunner({("-g", "IP4.GATEWAY", "device", "show", "eth0.20"):
+                        "10.1.1.1\n"})
+        self.assertEqual(NmClient(r).gateway("eth0.20"), "10.1.1.1")
+        self.assertEqual(len(r.calls), 1)
+
+    def test_gateway_falls_back_to_ipv6(self):
+        r = FakeRunner({
+            ("-g", "IP4.GATEWAY", "device", "show", "v"): "\n",
+            ("-g", "IP6.GATEWAY", "device", "show", "v"): "fd00::1\n"})
+        self.assertEqual(NmClient(r).gateway("v"), "fd00::1")
+
+    def test_gateway_dash_dash_is_none(self):
+        r = FakeRunner({
+            ("-g", "IP4.GATEWAY", "device", "show", "v"): "--\n",
+            ("-g", "IP6.GATEWAY", "device", "show", "v"): "--\n"})
+        self.assertIsNone(NmClient(r).gateway("v"))
+
+    def test_gateway_error_is_none(self):
+        r = FakeRunner({
+            ("-g", "IP4.GATEWAY", "device", "show", "v"): NmError("gone"),
+            ("-g", "IP6.GATEWAY", "device", "show", "v"): NmError("gone")})
+        self.assertIsNone(NmClient(r).gateway("v"))
+
+    def test_export_spec_by_uuid_addresses_uuid_and_reads_name(self):
+        r = FakeRunner({
+            conn_argv_uuid(UUID): STATIC,
+            ("-g", "connection.id", "connection", "show", "uuid", UUID):
+                "eth0.20\n"})
+        self.assertEqual(NmClient(r).export_spec(UUID).name, "eth0.20")
 
     def test_is_running_false_when_nmcli_errors(self):
         r = FakeRunner({("-t", "-f", "RUNNING", "general"):
@@ -126,15 +160,17 @@ class NmClientTest(unittest.TestCase):
 
 
 class WriteRunner:
-    def __init__(self, error=None):
+    def __init__(self, error=None, output=None):
         self.calls = []
         self.error = error
+        self.output = ("Connection 'x' (%s) successfully added.\n" % UUID
+                       if output is None else output)
 
     def __call__(self, argv):
         self.calls.append(list(argv))
         if self.error:
             raise self.error
-        return ""
+        return self.output
 
 
 class NmWriteTest(unittest.TestCase):
@@ -170,6 +206,32 @@ class NmWriteTest(unittest.TestCase):
         r = WriteRunner()
         NmClient(r).delete_vlan("eth0.20")
         self.assertEqual(r.calls, [["connection", "delete", "eth0.20"]])
+
+    def test_create_returns_uuid(self):
+        r = WriteRunner(output="Connection 'eth0.20' (%s) successfully "
+                               "added.\n" % UUID)
+        self.assertEqual(
+            NmClient(r).create_vlan(VlanSpec("eth0", 20, "eth0.20")), UUID)
+
+    def test_create_without_uuid_in_output_raises(self):
+        with self.assertRaises(NmError):
+            NmClient(WriteRunner(output="ok\n")).create_vlan(
+                VlanSpec("eth0", 20, "eth0.20"))
+
+    def test_delete_by_uuid_argv(self):
+        r = WriteRunner()
+        NmClient(r).delete_vlan(UUID)
+        self.assertEqual(r.calls, [["connection", "delete", "uuid", UUID]])
+
+    def test_up_down_modify_by_uuid_argv(self):
+        r = WriteRunner()
+        c = NmClient(r)
+        c.up(UUID)
+        c.down(UUID)
+        c.modify_vlan(UUID, VlanSpec("eth0", 20, "eth0.20"))
+        self.assertEqual(r.calls[0], ["connection", "up", "uuid", UUID])
+        self.assertEqual(r.calls[1], ["connection", "down", "uuid", UUID])
+        self.assertEqual(r.calls[2][:4], ["connection", "modify", "uuid", UUID])
 
     def test_modify_clears_removed_values(self):
         r = WriteRunner()

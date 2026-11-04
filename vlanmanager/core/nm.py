@@ -13,6 +13,13 @@ Runner = Callable[[list[str]], str]
 _UUID_RE = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
     r"[0-9a-fA-F]{12}$")
+_ADDED_UUID_RE = re.compile(
+    r"\(([0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12})\)")
+
+
+def _sel(ident: str) -> list[str]:
+    """Connection selector: names are ambiguous in NM, UUIDs are not."""
+    return ["uuid", ident] if _UUID_RE.match(ident) else [ident]
 
 _CONN_FIELDS = ("vlan.parent,vlan.id,ipv4.method,ipv4.addresses,"
                 "ipv4.gateway,ipv4.dns,ipv6.method,ipv6.addresses,"
@@ -151,15 +158,28 @@ class NmClient:
             vlans.append(Vlan(spec=spec, uuid=uuid, active=uuid in active))
         return vlans
 
-    def export_spec(self, name: str) -> VlanSpec:
-        return self._parse_connection(name, self._read(name))
+    def export_spec(self, ident: str) -> VlanSpec:
+        name = ident
+        if _UUID_RE.match(ident):
+            name = self._run(["-g", "connection.id", "connection", "show",
+                              *_sel(ident)]).strip() or ident
+        return self._parse_connection(name, self._read(ident))
 
-    def gateway(self, name: str) -> str | None:
-        return self.export_spec(name).ipv4.gateway
+    def gateway(self, iface: str) -> str | None:
+        """Gateway of the active configuration of a device."""
+        for prop in ("IP4.GATEWAY", "IP6.GATEWAY"):
+            try:
+                out = self._run(["-g", prop, "device", "show", iface])
+            except NmError:
+                continue
+            value = out.strip()
+            if value and value != "--":
+                return value
+        return None
 
     def _read(self, ident: str) -> str:
         return self._run(["-t", "-f", _CONN_FIELDS, "connection", "show",
-                          ident])
+                          *_sel(ident)])
 
     def _parse_connection(self, name: str, text: str) -> VlanSpec:
         f: dict[str, str] = {}
@@ -182,25 +202,29 @@ class NmClient:
             autoconnect=f.get("connection.autoconnect", "yes") != "no",
             mtu=mtu)
 
-    def create_vlan(self, spec: VlanSpec) -> None:
-        self._run(["connection", "add", "type", "vlan",
+    def create_vlan(self, spec: VlanSpec) -> str:
+        out = self._run(["connection", "add", "type", "vlan",
                    "con-name", spec.name, "ifname", spec.name,
                    "dev", spec.parent, "id", str(spec.vlan_id),
                    *_spec_to_args(spec)])
+        found = _ADDED_UUID_RE.search(out or "")
+        if not found:
+            raise NmError("connection UUID missing from nmcli output")
+        return found.group(1)
 
-    def modify_vlan(self, name: str, spec: VlanSpec) -> None:
-        argv = ["connection", "modify", name,
+    def modify_vlan(self, ident: str, spec: VlanSpec) -> None:
+        argv = ["connection", "modify", *_sel(ident),
                 "vlan.parent", spec.parent, "vlan.id", str(spec.vlan_id)]
-        if spec.name != name:
+        if spec.name != ident:
             argv += ["connection.id", spec.name,
                      "connection.interface-name", spec.name]
         self._run(argv + _spec_to_args(spec, modify=True))
 
-    def delete_vlan(self, name: str) -> None:
-        self._run(["connection", "delete", name])
+    def delete_vlan(self, ident: str) -> None:
+        self._run(["connection", "delete", *_sel(ident)])
 
-    def up(self, name: str) -> None:
-        self._run(["connection", "up", name])
+    def up(self, ident: str) -> None:
+        self._run(["connection", "up", *_sel(ident)])
 
-    def down(self, name: str) -> None:
-        self._run(["connection", "down", name])
+    def down(self, ident: str) -> None:
+        self._run(["connection", "down", *_sel(ident)])

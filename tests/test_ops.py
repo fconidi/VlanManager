@@ -6,6 +6,9 @@ from vlanmanager.core.ops import (create_vlan_safe, delete_vlan_safe,
                                   edit_vlan_safe)
 
 
+NEW_UUID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+
+
 class FakeNm:
     def __init__(self, exported=None, fail_up=False):
         self.calls = []
@@ -14,6 +17,7 @@ class FakeNm:
 
     def create_vlan(self, spec):
         self.calls.append(("create_vlan", spec))
+        return NEW_UUID
 
     def modify_vlan(self, name, spec):
         self.calls.append(("modify_vlan", name, spec))
@@ -43,18 +47,24 @@ class CreateTest(unittest.TestCase):
     def test_create_confirmed(self):
         nm = FakeNm()
         self.assertTrue(create_vlan_safe(nm, NEW, lambda: True))
-        self.assertEqual(nm.calls, [("create_vlan", NEW), ("up", "eth0.30")])
+        self.assertEqual(nm.calls, [("create_vlan", NEW), ("up", NEW_UUID)])
 
     def test_create_activation_fails_removes_connection(self):
         nm = FakeNm(fail_up=True)
         with self.assertRaises(NmError):
             create_vlan_safe(nm, NEW, lambda: True)
-        self.assertEqual(nm.calls[-1], ("delete_vlan", "eth0.30"))
+        self.assertEqual(nm.calls[-1], ("delete_vlan", NEW_UUID))
+
+    def test_create_safe_undo_deletes_by_uuid(self):
+        nm = FakeNm()
+        create_vlan_safe(nm, NEW, lambda: False)
+        self.assertIn(("delete_vlan", NEW_UUID), nm.calls)
+        self.assertNotIn(("delete_vlan", "eth0.30"), nm.calls)
 
     def test_create_not_confirmed_deletes(self):
         nm = FakeNm()
         self.assertFalse(create_vlan_safe(nm, NEW, lambda: False))
-        self.assertEqual(nm.calls[-1], ("delete_vlan", "eth0.30"))
+        self.assertEqual(nm.calls[-1], ("delete_vlan", NEW_UUID))
 
 
 class DeleteTest(unittest.TestCase):
@@ -67,7 +77,7 @@ class DeleteTest(unittest.TestCase):
         nm = FakeNm(exported=OLD)
         self.assertFalse(delete_vlan_safe(nm, "eth0.20", lambda: False))
         self.assertEqual(nm.calls[-2:],
-                         [("create_vlan", OLD), ("up", "eth0.20")])
+                         [("create_vlan", OLD), ("up", NEW_UUID)])
 
     def test_delete_failure_does_not_recreate(self):
         nm = FakeNm(exported=OLD)
@@ -82,6 +92,13 @@ class DeleteTest(unittest.TestCase):
 
 
 class EditTest(unittest.TestCase):
+    def test_edit_by_uuid_keeps_addressing_by_uuid(self):
+        nm = FakeNm(exported=OLD)
+        u = "11111111-2222-3333-4444-555555555555"
+        edit_vlan_safe(nm, u, NEW, lambda: False)
+        self.assertEqual(nm.calls, [("modify_vlan", u, NEW), ("up", u),
+                                    ("modify_vlan", u, OLD), ("up", u)])
+
     def test_edit_confirmed(self):
         nm = FakeNm(exported=OLD)
         self.assertTrue(edit_vlan_safe(nm, "eth0.20", NEW, lambda: True))

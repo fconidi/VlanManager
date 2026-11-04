@@ -5,7 +5,7 @@ from typing import Callable
 
 from .checkpoint import CheckpointError, NmCheckpoints
 from .model import VlanSpec
-from .nm import _UUID_RE, NmClient
+from .nm import _UUID_RE, NMCLI_TIMEOUT_S, NmClient
 from .rollback import run_with_rollback
 
 # NetworkManager reverts on its own this long after the confirm dialog
@@ -25,10 +25,13 @@ def _nm_rollback(cp: NmCheckpoints, path: str,
 
 def _run_with_checkpoint(cp: NmCheckpoints, path: str,
                          apply: Callable[[], None],
-                         ask_confirm: Callable[[], bool]) -> bool:
+                         ask_confirm: Callable[[], bool],
+                         confirm_timeout_s: int) -> bool:
     """Like run_with_rollback, with NetworkManager doing the revert."""
     try:
         apply()
+        # The countdown started at creation; restart it for the dialog.
+        cp.adjust(path, confirm_timeout_s + CHECKPOINT_MARGIN_S)
     except Exception as exc:
         _nm_rollback(cp, path, exc)
         raise
@@ -50,7 +53,9 @@ def _checkpoint(cp: NmCheckpoints | None,
     if cp is None or not cp.available():
         return None
     try:
-        return cp.create(confirm_timeout_s + CHECKPOINT_MARGIN_S)
+        # Long enough for a slow activation; shortened once it is done.
+        return cp.create(NMCLI_TIMEOUT_S + confirm_timeout_s
+                         + CHECKPOINT_MARGIN_S)
     except CheckpointError:
         return None  # nothing applied yet: the in-process undo still works
 
@@ -63,7 +68,7 @@ def create_vlan_safe(nm: NmClient, spec: VlanSpec,
     if path is not None:
         return _run_with_checkpoint(checkpoints, path,
                                     lambda: nm.up(nm.create_vlan(spec)),
-                                    ask_confirm)
+                                    ask_confirm, confirm_timeout_s)
     uuid = nm.create_vlan(spec)
     return run_with_rollback(lambda: nm.up(uuid),
                              lambda: nm.delete_vlan(uuid), ask_confirm)
@@ -91,7 +96,8 @@ def edit_vlan_safe(nm: NmClient, name: str, spec: VlanSpec,
 
     path = _checkpoint(checkpoints, confirm_timeout_s)
     if path is not None:
-        return _run_with_checkpoint(checkpoints, path, apply, ask_confirm)
+        return _run_with_checkpoint(checkpoints, path, apply, ask_confirm,
+                                    confirm_timeout_s)
     return run_with_rollback(apply, undo, ask_confirm)
 
 
@@ -113,5 +119,6 @@ def delete_vlan_safe(nm: NmClient, name: str,
 
     path = _checkpoint(checkpoints, confirm_timeout_s)
     if path is not None:
-        return _run_with_checkpoint(checkpoints, path, apply, ask_confirm)
+        return _run_with_checkpoint(checkpoints, path, apply, ask_confirm,
+                                    confirm_timeout_s)
     return run_with_rollback(apply, undo, ask_confirm)

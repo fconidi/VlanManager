@@ -27,6 +27,9 @@ _CONN_FIELDS = ("vlan.parent,vlan.id,ipv4.method,ipv4.addresses,"
                 "802-3-ethernet.mtu")
 
 
+NMCLI_TIMEOUT_S = 30
+
+
 class NmError(Exception):
     def __init__(self, message: str):
         super().__init__(message)
@@ -37,7 +40,7 @@ def subprocess_runner(argv: list[str]) -> str:
     env = dict(os.environ, LC_ALL="C")
     try:
         proc = subprocess.run(["nmcli", *argv], capture_output=True,
-                              text=True, env=env, timeout=30)
+                              text=True, env=env, timeout=NMCLI_TIMEOUT_S)
     except FileNotFoundError:
         raise NmError("nmcli_missing") from None
     except subprocess.TimeoutExpired:

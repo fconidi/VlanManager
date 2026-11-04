@@ -344,7 +344,11 @@ class MainWindow(Gtk.ApplicationWindow):
         confirmed = op()
         if not confirmed:
             return False, None
-        return True, probe.verify_vlan(self.nm, spec.name)[1]
+        try:
+            return True, probe.verify_vlan(self.nm, spec.name)[1]
+        except Exception:
+            # The change is applied and confirmed; only the check failed.
+            return True, "verify_unavailable"
 
     def _on_delete(self, _btn) -> None:
         vlan = self.selected_vlan()

@@ -549,6 +549,47 @@ class OperationTests(MainWindowTests):
             self.assertTrue(pump(lambda: self.refreshes(nm) > before))
         self.assertEqual(seen, {"ident": "uuid-1", "spec": new})
 
+    def _verify_raises(self, kind):
+        nm = FakeNm()
+        win = self.make(nm)
+        errors = []
+        before = self.refreshes(nm)
+
+        def boom(nm_, iface):
+            raise NmError("nmcli timed out talking to device")
+
+        patches = [mock.patch.object(win, "_show_error_dialog",
+                                     errors.append),
+                   mock.patch.object(window.probe, "verify_vlan", boom)]
+        if kind == "create":
+            spec = VlanSpec("eth0", 30, "eth0.30")
+            patches.append(mock.patch.object(
+                window.ops, "create_vlan_safe", lambda *a, **k: True))
+            click = win.btn_add
+        else:
+            self.select(win, "eth0.20")
+            spec = VlanSpec("eth0", 20, "eth0.20", mtu=1400)
+            patches.append(mock.patch.object(
+                window.ops, "edit_vlan_safe", lambda *a, **k: True))
+            click = win.btn_edit
+        patches.append(mock.patch.object(
+            dialogs.VlanDialog, "run_and_get", return_value=spec))
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+        click.clicked()
+        self.assertTrue(pump(lambda: self.refreshes(nm) > before))
+        pump(lambda: win.info_label.get_text() != "", 1)
+        self.assertEqual(errors, [])
+        self.assertEqual(win.info_label.get_text(), tr("verify_unavailable"))
+        self.assertNotEqual(win.info_label.get_text(), tr("op_reverted"))
+
+    def test_create_verify_error_is_not_fatal(self):
+        self._verify_raises("create")
+
+    def test_edit_verify_error_is_not_fatal(self):
+        self._verify_raises("edit")
+
     def test_add_enabled_without_selection(self):
         win = self.make(FakeNm())
         win.tree.get_selection().unselect_all()

@@ -23,7 +23,8 @@ class I18nTest(unittest.TestCase):
 
     def test_all_validation_codes_translated(self):
         codes = ["id_range", "name_empty", "name_len", "duplicate",
-                 "address_invalid", "gateway_invalid", "mtu_range",
+                 "address_invalid", "gateway_invalid", "dns_invalid",
+                 "mtu_range",
                  "ok", "no_gateway", "ping_failed",
                  "nmcli_missing", "nmcli_timeout"]
         for lang in ("it", "en"):

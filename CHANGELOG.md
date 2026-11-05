@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.1
+
+- Validate that static addresses, gateways and DNS servers match their IPv4 or IPv6 fields.
+
 ## 0.1.0
 
 - First version.

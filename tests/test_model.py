@@ -41,6 +41,26 @@ class ModelTests(unittest.TestCase):
         auto = spec(ipv4=IpConfig("auto", "garbage"))
         self.assertEqual(validate(auto, []), [])
 
+    def test_manual_address_and_gateway_match_ip_family(self):
+        wrong_v4 = spec(ipv4=IpConfig("manual", "2001:db8::2/64",
+                                          "2001:db8::1"))
+        self.assertIn("address_invalid", validate(wrong_v4, []))
+        self.assertIn("gateway_invalid", validate(wrong_v4, []))
+        wrong_v6 = spec(ipv6=IpConfig("manual", "192.0.2.2/24",
+                                          "192.0.2.1"))
+        self.assertIn("address_invalid", validate(wrong_v6, []))
+        self.assertIn("gateway_invalid", validate(wrong_v6, []))
+
+    def test_manual_dns_addresses_are_valid_and_match_ip_family(self):
+        bad = spec(ipv4=IpConfig("manual", "192.0.2.2/24", dns=("garbage",)))
+        self.assertIn("dns_invalid", validate(bad, []))
+        wrong_family = spec(ipv6=IpConfig("manual", "2001:db8::2/64",
+                                              dns=("192.0.2.53",)))
+        self.assertIn("dns_invalid", validate(wrong_family, []))
+        good = spec(ipv4=IpConfig("manual", "192.0.2.2/24",
+                                   dns=("192.0.2.53", "198.51.100.53")))
+        self.assertNotIn("dns_invalid", validate(good, []))
+
     def test_mtu_range(self):
         self.assertIn("mtu_range", validate(spec(mtu=100), []))
         self.assertNotIn("mtu_range", validate(spec(mtu=None), []))

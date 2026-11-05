@@ -53,20 +53,29 @@ def default_name(parent: str, vlan_id: int) -> str:
     return f"{parent}.{vlan_id}"
 
 
-def _check_ip(cfg: IpConfig, errors: list[str]) -> None:
+def _check_ip(cfg: IpConfig, version: int, errors: list[str]) -> None:
     if cfg.method != "manual":
         return
     try:
         if not cfg.address or "/" not in cfg.address:
             raise ValueError
-        ipaddress.ip_interface(cfg.address)
+        if ipaddress.ip_interface(cfg.address).version != version:
+            raise ValueError
     except ValueError:
         errors.append("address_invalid")
     if cfg.gateway:
         try:
-            ipaddress.ip_address(cfg.gateway)
+            if ipaddress.ip_address(cfg.gateway).version != version:
+                raise ValueError
         except ValueError:
             errors.append("gateway_invalid")
+    for dns in cfg.dns:
+        try:
+            if ipaddress.ip_address(dns).version != version:
+                raise ValueError
+        except ValueError:
+            errors.append("dns_invalid")
+            break
 
 
 def validate(spec: VlanSpec, existing: Sequence[VlanSpec],
@@ -84,8 +93,8 @@ def validate(spec: VlanSpec, existing: Sequence[VlanSpec],
         if other.parent == spec.parent and other.vlan_id == spec.vlan_id:
             errors.append("duplicate")
             break
-    for cfg in (spec.ipv4, spec.ipv6):
-        _check_ip(cfg, errors)
+    for version, cfg in ((4, spec.ipv4), (6, spec.ipv6)):
+        _check_ip(cfg, version, errors)
     if spec.mtu is not None and not MTU_MIN <= spec.mtu <= MTU_MAX:
         errors.append("mtu_range")
     return list(dict.fromkeys(errors))

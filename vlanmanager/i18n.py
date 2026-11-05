@@ -9,6 +9,7 @@ _EN = {
     "duplicate": "A VLAN with this ID or name already exists on this interface.",
     "address_invalid": "The IP address is not valid (use address/prefix, e.g. 192.168.10.5/24).",
     "gateway_invalid": "The gateway address is not valid.",
+    "dns_invalid": "A DNS address is not valid for this IP version.",
     "mtu_range": "The MTU must be between 576 and 9000.",
     # probe codes
     "ok": "The VLAN is working: the gateway answered.",
@@ -90,6 +91,7 @@ _IT = {
     "duplicate": "Esiste già una VLAN con questo ID o nome su questa interfaccia.",
     "address_invalid": "L'indirizzo IP non è valido (usa indirizzo/prefisso, es. 192.168.10.5/24).",
     "gateway_invalid": "L'indirizzo del gateway non è valido.",
+    "dns_invalid": "Un indirizzo DNS non è valido per questa versione IP.",
     "mtu_range": "L'MTU deve essere compreso tra 576 e 9000.",
     "ok": "La VLAN funziona: il gateway ha risposto.",
     "no_gateway": ("Nessun gateway ottenuto, quindi la raggiungibilità non "

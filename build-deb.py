@@ -52,6 +52,11 @@ def main(argv=None) -> int:
                 "org.syslinuxos.VlanManager.svg")
         for name in ("README.md", "CHANGELOG.md", "LICENSE"):
             install(source / name, f"usr/share/doc/vlanmanager/{name}")
+        install(source / "data/org.syslinuxos.VlanManager.svg",
+                "usr/share/doc/vlanmanager/data/org.syslinuxos.VlanManager.svg")
+        for name in ("main-window.png", "create-vlan.png"):
+            install(source / "images" / name,
+                    f"usr/share/doc/vlanmanager/images/{name}")
         control = root / "DEBIAN"
         control.mkdir()
         (control / "control").write_text(

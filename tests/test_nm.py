@@ -8,7 +8,8 @@ from vlanmanager.core.model import IpConfig, VlanSpec
 from vlanmanager.core.nm import NmClient, NmError, split_terse
 
 CONN_FIELDS = ("vlan.parent,vlan.id,ipv4.method,ipv4.addresses,ipv4.gateway,"
-               "ipv4.dns,ipv6.method,ipv6.addresses,ipv6.gateway,ipv6.dns,"
+               "ipv4.dns,ipv4.never-default,ipv6.method,ipv6.addresses,"
+               "ipv6.gateway,ipv6.dns,ipv6.never-default,"
                "connection.autoconnect,802-3-ethernet.mtu,connection.id,"
                "connection.interface-name")
 
@@ -44,6 +45,7 @@ ipv4.method:manual
 ipv4.addresses:192.168.20.5/24
 ipv4.gateway:192.168.20.1
 ipv4.dns:192.168.20.1, 1.1.1.1
+ipv4.never-default:yes
 ipv6.method:disabled
 ipv6.addresses:
 ipv6.gateway:
@@ -107,7 +109,7 @@ class NmClientTest(unittest.TestCase):
             NmClient(r).export_spec("eth0.20"),
             VlanSpec(parent="eth0", vlan_id=20, name="eth0.20",
                      ipv4=IpConfig("manual", "192.168.20.5/24",
-                                   "192.168.20.1", ("192.168.20.1", "1.1.1.1")),
+                                   "192.168.20.1", ("192.168.20.1", "1.1.1.1"), True),
                      ipv6=IpConfig("disabled"),
                      autoconnect=True, mtu=None))
 
@@ -213,7 +215,8 @@ class NmWriteTest(unittest.TestCase):
         self.assertEqual(r.calls, [[
             "connection", "add", "type", "vlan", "con-name", "eth0.20",
             "ifname", "eth0.20", "dev", "eth0", "id", "20",
-            "ipv4.method", "auto", "ipv6.method", "auto",
+            "ipv4.method", "auto", "ipv4.never-default", "no",
+            "ipv6.method", "auto", "ipv6.never-default", "no",
             "connection.autoconnect", "yes"]])
 
     def test_create_vlan_static(self):
@@ -224,9 +227,18 @@ class NmWriteTest(unittest.TestCase):
         NmClient(r).create_vlan(spec)
         argv = r.calls[0]
         i = argv.index("ipv4.method")
-        self.assertEqual(argv[i:i + 8], [
-            "ipv4.method", "manual", "ipv4.addresses", "192.168.20.5/24",
+        self.assertEqual(argv[i:i + 10], [
+            "ipv4.method", "manual", "ipv4.never-default", "no",
+            "ipv4.addresses", "192.168.20.5/24",
             "ipv4.gateway", "192.168.20.1", "ipv4.dns", "1.1.1.1,9.9.9.9"])
+
+    def test_never_default_is_written_and_read(self):
+        r = WriteRunner()
+        spec = VlanSpec("eth0", 20, "eth0.20", ipv4=IpConfig(never_default=True))
+        NmClient(r).create_vlan(spec)
+        argv = r.calls[0]
+        self.assertEqual(argv[argv.index("ipv4.never-default") + 1], "yes")
+        self.assertEqual(argv[argv.index("ipv6.never-default") + 1], "no")
 
     def test_create_with_mtu_adds_802_3_ethernet_mtu(self):
         r = WriteRunner()

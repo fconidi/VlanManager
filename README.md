@@ -56,10 +56,10 @@ APT will also provide future package updates through the same repository.
 
 ### From a GitHub release
 
-Download `vlanmanager_0.1.1_all.deb` from the [v0.1.1 release](https://github.com/fconidi/VlanManager/releases/tag/v0.1.1), then install it from the download directory:
+Download `vlanmanager_0.1.2_all.deb` from the [v0.1.2 release](https://github.com/fconidi/VlanManager/releases/tag/v0.1.2), then install it from the download directory:
 
 ```bash
-sudo apt install ./vlanmanager_0.1.1_all.deb
+sudo apt install ./vlanmanager_0.1.2_all.deb
 vlanmanager
 ```
 

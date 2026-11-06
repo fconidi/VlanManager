@@ -35,6 +35,8 @@ class _IpBox(Gtk.Grid):
         self.address = Gtk.Entry(hexpand=True)
         self.gateway = Gtk.Entry(hexpand=True)
         self.dns = Gtk.Entry(hexpand=True)
+        self.never_default = Gtk.CheckButton(
+            label=tr("field_never_default"))
         rows = ((tr("field_ipv4_method" if title == "ipv4"
                     else "field_ipv6_method"), self.method),
                 (tr("field_address"), self.address),
@@ -44,6 +46,7 @@ class _IpBox(Gtk.Grid):
             label = Gtk.Label(label=text, halign=Gtk.Align.END)
             self.attach(label, 0, i, 1, 1)
             self.attach(widget, 1, i, 1, 1)
+        self.attach(self.never_default, 1, len(rows), 1, 1)
         self.method.connect("changed", lambda _c: self._sync())
         self._sync()
 
@@ -57,14 +60,16 @@ class _IpBox(Gtk.Grid):
         self.address.set_text(cfg.address or "")
         self.gateway.set_text(cfg.gateway or "")
         self.dns.set_text(", ".join(cfg.dns))
+        self.never_default.set_active(cfg.never_default)
 
     def config(self) -> IpConfig:
         method = self.method.get_active_id() or "auto"
+        never = self.never_default.get_active()
         if method != "manual":
-            return IpConfig(method)
+            return IpConfig(method, never_default=never)
         dns = tuple(p for p in self.dns.get_text().replace(",", " ").split())
         return IpConfig("manual", self.address.get_text().strip() or None,
-                        self.gateway.get_text().strip() or None, dns)
+                        self.gateway.get_text().strip() or None, dns, never)
 
 
 class VlanDialog(Gtk.Dialog):
@@ -75,6 +80,7 @@ class VlanDialog(Gtk.Dialog):
             title=tr("dialog_edit_title" if editing else "dialog_add_title"),
             transient_for=parent_window, modal=True)
         self.existing = list(existing)
+        self.reserved = [nic.name for nic in nics]
         self.editing = editing
         self._name_manual = editing is not None
         self._setting_name = False
@@ -88,12 +94,12 @@ class VlanDialog(Gtk.Dialog):
         for nic in nics:
             if nic.managed:
                 self.parent_combo.append(nic.name, nic.name)
-        self.id_spin = Gtk.SpinButton.new_with_range(1, 4094, 1)
+        self.id_spin = Gtk.SpinButton.new_with_range(0, 99999, 1)
         self.id_spin.set_numeric(True)
         self.name_entry = Gtk.Entry(hexpand=True, max_length=0)
         self.autoconnect = Gtk.CheckButton(label=tr("field_autoconnect"),
                                            active=True)
-        self.mtu_entry = Gtk.Entry(placeholder_text="auto")
+        self.mtu_entry = Gtk.Entry(placeholder_text=tr("mtu_auto"))
         self.ipv4_box = _IpBox("ipv4")
         self.ipv6_box = _IpBox("ipv6")
         self.ipv4_method, self.ipv4_address = (self.ipv4_box.method,
@@ -152,6 +158,8 @@ class VlanDialog(Gtk.Dialog):
             w.connect("changed", lambda _w: self._update())
         for combo in (self.ipv4_method, self.ipv6_method):
             combo.connect("changed", lambda _c: self._update())
+        for box in (self.ipv4_box, self.ipv6_box):
+            box.never_default.connect("toggled", lambda _c: self._update())
         self.autoconnect.connect("toggled", lambda _c: self._update())
         self.show_all()
         self._update()
@@ -202,10 +210,22 @@ class VlanDialog(Gtk.Dialog):
             autoconnect=self.autoconnect.get_active(), mtu=mtu,
             con_name=self.editing.con_name if self.editing else None)
 
+    def _parent_mtu(self) -> int | None:
+        parent = self.parent_combo.get_active_id()
+        if not parent or "/" in parent:
+            return None
+        try:
+            with open(f"/sys/class/net/{parent}/mtu") as handle:
+                return int(handle.read().strip())
+        except (OSError, ValueError):
+            return None
+
     def errors(self) -> list[str]:
         spec = self.current_spec()
+        parent_mtu = self._parent_mtu()
         errors = validate(spec, self.existing,
-                          editing=self.editing.name if self.editing else None)
+                          editing=self.editing.name if self.editing else None,
+                          reserved=self.reserved, parent_mtu=parent_mtu)
         if not self._mtu()[1] and "mtu_range" not in errors:
             errors.append("mtu_range")
         return errors
@@ -213,7 +233,8 @@ class VlanDialog(Gtk.Dialog):
     def _update(self) -> None:
         errors = self.errors()
         has_parent = bool(self.parent_combo.get_active_id())
-        self.error_label.set_text(tr(errors[0]) if errors else "")
+        self.error_label.set_text(
+            tr(errors[0], mtu=self._parent_mtu() or "") if errors else "")
         self.ok_button.set_sensitive(not errors and has_parent)
 
     def run_and_get(self) -> VlanSpec | None:

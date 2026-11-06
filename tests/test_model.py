@@ -66,6 +66,33 @@ class ModelTests(unittest.TestCase):
         self.assertNotIn("mtu_range", validate(spec(mtu=None), []))
         self.assertNotIn("mtu_range", validate(spec(mtu=1500), []))
 
+    def test_name_must_be_valid_and_unused(self):
+        for bad in ("a b", "a/b", "a:b", ".", ".."):
+            self.assertIn("name_invalid", validate(spec(name=bad), []), bad)
+        self.assertIn("name_taken", validate(spec(name="lo"), []))
+        self.assertIn("name_taken", validate(spec(name="eth1"), [], reserved=("eth1",)))
+        other = spec(parent="eth1", vlan_id=99, name="vlan99")
+        self.assertIn("name_taken", validate(spec(name="vlan99"), [other]))
+        self.assertNotIn("name_taken", validate(spec(name="vlan99"), [other], editing="vlan99"))
+        self.assertEqual(validate(spec(name="eth0.20"), []), [])
+
+    def test_ip_sanity_checks(self):
+        net = spec(ipv4=IpConfig("manual", "192.168.60.0/24"))
+        self.assertIn("address_network", validate(net, []))
+        same = spec(ipv4=IpConfig("manual", "192.168.60.5/24", "192.168.60.5"))
+        self.assertIn("gateway_same", validate(same, []))
+        out = spec(ipv4=IpConfig("manual", "192.168.60.5/24", "10.0.0.1"))
+        self.assertIn("gateway_outside", validate(out, []))
+        ok = spec(ipv4=IpConfig("manual", "192.168.60.5/24", "192.168.60.1"))
+        self.assertEqual(validate(ok, []), [])
+        v6 = spec(ipv6=IpConfig("manual", "2001:db8::5/64", "fe80::1"))
+        self.assertEqual(validate(v6, []), [])
+
+    def test_mtu_cannot_exceed_parent(self):
+        self.assertIn("mtu_parent", validate(spec(mtu=9000), [], parent_mtu=1500))
+        self.assertNotIn("mtu_parent", validate(spec(mtu=1500), [], parent_mtu=1500))
+        self.assertNotIn("mtu_parent", validate(spec(mtu=9000), [], parent_mtu=None))
+
 
 if __name__ == "__main__":
     unittest.main()

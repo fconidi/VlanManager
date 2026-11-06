@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import ipaddress
+import re
 from dataclasses import dataclass
 from typing import Sequence
 
 MAX_NAME_LEN = 15
 MTU_MIN, MTU_MAX = 576, 9000
+_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 
 
 @dataclass(frozen=True)
@@ -15,6 +17,7 @@ class IpConfig:
     address: str | None = None  # CIDR, e.g. 192.168.20.5/24
     gateway: str | None = None
     dns: tuple[str, ...] = ()
+    never_default: bool = False  # do not use this VLAN as default route
 
 
 @dataclass(frozen=True)
@@ -59,16 +62,28 @@ def _check_ip(cfg: IpConfig, version: int, errors: list[str]) -> None:
     try:
         if not cfg.address or "/" not in cfg.address:
             raise ValueError
-        if ipaddress.ip_interface(cfg.address).version != version:
+        iface = ipaddress.ip_interface(cfg.address)
+        if iface.version != version:
             raise ValueError
     except ValueError:
         errors.append("address_invalid")
+        iface = None
+    if iface is not None and version == 4 and iface.network.prefixlen < 31 \
+            and iface.ip == iface.network.network_address:
+        errors.append("address_network")
     if cfg.gateway:
         try:
-            if ipaddress.ip_address(cfg.gateway).version != version:
+            gateway = ipaddress.ip_address(cfg.gateway)
+            if gateway.version != version:
                 raise ValueError
         except ValueError:
             errors.append("gateway_invalid")
+        else:
+            if iface is not None:
+                if gateway == iface.ip:
+                    errors.append("gateway_same")
+                elif version == 4 and gateway not in iface.network:
+                    errors.append("gateway_outside")
     for dns in cfg.dns:
         try:
             if ipaddress.ip_address(dns).version != version:
@@ -79,7 +94,8 @@ def _check_ip(cfg: IpConfig, version: int, errors: list[str]) -> None:
 
 
 def validate(spec: VlanSpec, existing: Sequence[VlanSpec],
-             editing: str | None = None) -> list[str]:
+             editing: str | None = None, reserved: Sequence[str] = (),
+             parent_mtu: int | None = None) -> list[str]:
     errors: list[str] = []
     if not 1 <= spec.vlan_id <= 4094:
         errors.append("id_range")
@@ -87,14 +103,21 @@ def validate(spec: VlanSpec, existing: Sequence[VlanSpec],
         errors.append("name_empty")
     elif len(spec.name) > MAX_NAME_LEN:
         errors.append("name_len")
+    elif not _NAME_RE.match(spec.name) or spec.name in (".", ".."):
+        errors.append("name_invalid")
+    elif spec.name == "lo" or spec.name in reserved:
+        errors.append("name_taken")
     for other in existing:
         if other.name == editing:
             continue
         if other.parent == spec.parent and other.vlan_id == spec.vlan_id:
             errors.append("duplicate")
-            break
+        elif other.name == spec.name and spec.name:
+            errors.append("name_taken")
     for version, cfg in ((4, spec.ipv4), (6, spec.ipv6)):
         _check_ip(cfg, version, errors)
     if spec.mtu is not None and not MTU_MIN <= spec.mtu <= MTU_MAX:
         errors.append("mtu_range")
+    elif spec.mtu is not None and parent_mtu and spec.mtu > parent_mtu:
+        errors.append("mtu_parent")
     return list(dict.fromkeys(errors))

@@ -137,6 +137,34 @@ class MainWindowTests(unittest.TestCase):
         self.assertTrue(win.btn_edit.get_sensitive())
         self.assertTrue(win.btn_delete.get_sensitive())
 
+    def test_orphan_vlan_stays_visible_and_editable(self):
+        nm = FakeNm(vlans=[Vlan(VlanSpec("ethX", 5, "ethX.5"), "uuid-9", False)])
+        win = self.make(nm)
+        self.assertEqual(tree_rows(win), ["eth0", "eth1", "ethX", "ethX.5"])
+        self.select(win, "ethX.5")
+        self.assertTrue(win.btn_edit.get_sensitive())
+        self.assertTrue(win.btn_delete.get_sensitive())
+
+    def test_add_disabled_without_managed_nic(self):
+        nm = FakeNm(nics=[Nic("eth1", "aa:bb:cc:dd:ee:02", "unmanaged", False)], vlans=[])
+        win = self.make(nm)
+        self.assertFalse(win.btn_add.get_sensitive())
+
+    def test_add_and_edit_disabled_without_8021q(self):
+        win = self.make(FakeNm(), module_ok=False)
+        self.assertTrue(pump(lambda: win._module_missing))
+        self.select(win, "eth0.20")
+        self.assertFalse(win.btn_add.get_sensitive())
+        self.assertFalse(win.btn_edit.get_sensitive())
+
+    def test_nic_state_is_translated(self):
+        set_language("it")
+        win = self.make(FakeNm())
+        states = []
+        win.store.foreach(lambda m, p, it: states.append(m[it][win.COL_STATE]) or False)
+        self.assertIn("connessa", states)
+        self.assertIn("non gestita", states)
+
     def test_unmanaged_nic_has_tooltip(self):
         win = self.make(FakeNm())
         found = []
@@ -266,6 +294,30 @@ class DialogTests(unittest.TestCase):
         d.id_spin.set_value(30)
         self.assertTrue(d.ok_button.get_sensitive())
         self.assertEqual(d.error_label.get_text(), "")
+
+    def test_dialog_shows_range_error_for_out_of_range_id(self):
+        d = self.make()
+        set_combo(d.parent_combo, "eth0")
+        for value in (0, 4095, 99999):
+            d.id_spin.set_value(value)
+            self.assertFalse(d.ok_button.get_sensitive(), value)
+            self.assertEqual(d.error_label.get_text(), tr("id_range"), value)
+
+    def test_dialog_rejects_name_of_existing_interface(self):
+        d = self.make()
+        set_combo(d.parent_combo, "eth0")
+        d.id_spin.set_value(30)
+        d.name_entry.set_text("eth2")
+        self.assertFalse(d.ok_button.get_sensitive())
+        self.assertEqual(d.error_label.get_text(), tr("name_taken"))
+
+    def test_never_default_checkbox_round_trips(self):
+        d = self.make()
+        set_combo(d.parent_combo, "eth0")
+        d.id_spin.set_value(30)
+        d.ipv4_box.never_default.set_active(True)
+        self.assertTrue(d.current_spec().ipv4.never_default)
+        self.assertFalse(d.current_spec().ipv6.never_default)
 
     def test_dialog_ok_disabled_for_long_name(self):
         d = self.make()

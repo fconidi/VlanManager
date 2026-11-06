@@ -24,6 +24,12 @@ _GREY = "#888888"
 _CONFIRM_WAIT_S = ops.CONFIRM_TIMEOUT_S + 60
 
 
+def _nic_state(state: str) -> str:
+    key = "nic_state_" + state.split(" ")[0]
+    text = tr(key)
+    return state if text == key else text
+
+
 def _error_text(exc: Exception) -> str:
     if isinstance(exc, NmError):
         # Codes are translated; anything else is the raw nmcli message.
@@ -41,6 +47,7 @@ class MainWindow(Gtk.ApplicationWindow):
         self.nm = nm
         self.loaded = False
         self._busy = False
+        self._module_missing = False
         self.nics: list[Nic] = []
         self.vlans: list[Vlan] = []
         self.set_default_size(720, 440)
@@ -157,8 +164,10 @@ class MainWindow(Gtk.ApplicationWindow):
 
     def _on_module_checked(self, available, error) -> None:
         if error is None and not available:
+            self._module_missing = True
             self.warn_bar.set_revealed(True)
             self.warn_bar.show()
+            self._update_buttons()
 
     def _fill(self) -> None:
         selected = self._selected_name()
@@ -166,7 +175,7 @@ class MainWindow(Gtk.ApplicationWindow):
         for nic in self.nics:
             grey = None if nic.managed else _GREY
             tip = None if nic.managed else tr("tooltip_unmanaged")
-            it = self.store.append(None, [nic.name, "", nic.state, "", grey,
+            it = self.store.append(None, [nic.name, "", _nic_state(nic.state), "", grey,
                                           tip, "nic", nic.managed])
             for v in self.vlans:
                 if v.spec.parent != nic.name:
@@ -175,6 +184,20 @@ class MainWindow(Gtk.ApplicationWindow):
                 self.store.append(it, [v.spec.name, str(v.spec.vlan_id),
                                        state, self._ip_text(v), grey, tip,
                                        "vlan", nic.managed])
+        known = {nic.name for nic in self.nics}
+        for parent in dict.fromkeys(v.spec.parent for v in self.vlans):
+            if parent in known:
+                continue
+            it = self.store.append(None, [parent, "", tr("state_missing_parent"),
+                                          "", _GREY,
+                                          tr("tooltip_missing_parent"),
+                                          "nic", True])
+            for v in self.vlans:
+                if v.spec.parent == parent:
+                    state = tr("state_active" if v.active else "state_inactive")
+                    self.store.append(it, [v.spec.name, str(v.spec.vlan_id),
+                                           state, self._ip_text(v), None,
+                                           None, "vlan", True])
         self.tree.expand_all()
         if selected:
             self._select(selected)
@@ -217,8 +240,11 @@ class MainWindow(Gtk.ApplicationWindow):
         is_vlan = bool(row) and row[self.COL_KIND] == "vlan"
         managed = True if row is None else row[self.COL_MANAGED]
         idle = not self._busy
-        self.btn_add.set_sensitive(idle and managed)
-        self.btn_edit.set_sensitive(idle and is_vlan and managed)
+        usable = any(nic.managed for nic in self.nics) \
+            and not self._module_missing
+        self.btn_add.set_sensitive(idle and managed and usable)
+        self.btn_edit.set_sensitive(idle and is_vlan and managed
+                                    and not self._module_missing)
         self.btn_delete.set_sensitive(idle and is_vlan and managed)
         self.btn_toggle.set_sensitive(idle and is_vlan and managed)
         vlan = self.selected_vlan()

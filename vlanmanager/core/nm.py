@@ -23,8 +23,9 @@ def _sel(ident: str) -> list[str]:
     return ["uuid", ident] if _UUID_RE.match(ident) else [ident]
 
 _CONN_FIELDS = ("vlan.parent,vlan.id,ipv4.method,ipv4.addresses,"
-                "ipv4.gateway,ipv4.dns,ipv6.method,ipv6.addresses,"
-                "ipv6.gateway,ipv6.dns,connection.autoconnect,"
+                "ipv4.gateway,ipv4.dns,ipv4.never-default,ipv6.method,"
+                "ipv6.addresses,ipv6.gateway,ipv6.dns,ipv6.never-default,"
+                "connection.autoconnect,"
                 "802-3-ethernet.mtu,connection.id,connection.interface-name")
 
 
@@ -104,11 +105,14 @@ def _ip_config(f: dict[str, str], prefix: str) -> IpConfig:
     return IpConfig(method=method,
                     address=_first(f.get(prefix + ".addresses", "")),
                     gateway=f.get(prefix + ".gateway", "").strip() or None,
-                    dns=dns)
+                    dns=dns,
+                    never_default=f.get(prefix + ".never-default", "")
+                    .strip().lower() == "yes")
 
 
 def _ip_args(prefix: str, cfg: IpConfig) -> list[str]:
-    args = [prefix + ".method", cfg.method]
+    args = [prefix + ".method", cfg.method,
+            prefix + ".never-default", "yes" if cfg.never_default else "no"]
     if cfg.method == "manual":
         args += [prefix + ".addresses", cfg.address or "",
                  prefix + ".gateway", cfg.gateway or "",
